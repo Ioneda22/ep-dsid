@@ -1,7 +1,0 @@
-{
-  "trackers": [
-    { "id": "tracker-1", "host": "192.168.0.10", "port": 9001 },
-    { "id": "tracker-2", "host": "192.168.0.11", "port": 9001 },
-    { "id": "tracker-3", "host": "192.168.0.12", "port": 9001 }
-  ]
-}

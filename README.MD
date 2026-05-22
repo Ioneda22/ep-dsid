@@ -1,93 +1,88 @@
-
 # PeerSpot
 
-Sistema distribuído P2P híbrido com trackers para compartilhamento de áudio, desenvolvido para a disciplina de Desenvolvimento de Sistemas de Informação Distribuídos (EACH-USP).
+Sistema distribuído P2P não estruturado hierárquico com **trackers (super peers)** para
+compartilhamento de arquivos de áudio em chunks, desenvolvido para a disciplina de
+Desenvolvimento de Sistemas de Informação Distribuídos (EACH-USP).
 
-Este documento detalha o processo de configuração inicial do ambiente de desenvolvimento e as instruções para execução local.
+Peers armazenam e transferem chunks diretamente entre si; trackers mantêm um índice
+global replicado e sincronizado via flooding sobre TCP. A especificação completa está
+em [`main.tex`](main.tex) e o guia de implementação em [`CLAUDE.md`](CLAUDE.md).
+
+> **Status:** projeto em fase inicial de implementação. A estrutura de diretórios está
+> montada (§3 do `CLAUDE.md`); os módulos ainda serão preenchidos seguindo o plano de
+> fases (§9). As instruções de execução multi-terminal serão detalhadas na Fase 7.
+
+---
 
 ## 1. Pré-requisitos
 
-O projeto requer **Python 3.11 ou superior**. Verifique sua versão executando:
+O projeto requer **Python 3.11 ou superior**. Verifique sua versão:
+
 ```bash
 python --version
-
 ```
 
-
-
-* **Windows:**
-Baixe o instalador oficial em [python.org](https://www.python.org/) e execute-o. **Importante:** Marque a opção "Add Python to PATH" durante a instalação.
+No Windows, baixe o instalador oficial em [python.org](https://www.python.org/) e marque
+a opção **"Add Python to PATH"** durante a instalação.
 
 ---
 
 ## 2. Configuração do Ambiente Virtual
 
-Toda a manipulação de pacotes Python neste projeto deve ocorrer dentro de um ambiente virtual (`.venv`) isolado. Nunca instale as dependências no Python global do sistema.
+Toda manipulação de pacotes deve ocorrer em um ambiente virtual (`.venv`) isolado.
 
-**Passo 1:** Na raiz do projeto, crie o ambiente virtual:
+**Passo 1 — criar o ambiente** (na raiz do projeto):
 
 ```bash
 python -m venv .venv
-
 ```
 
-**Passo 2:** Ative o ambiente virtual:
+**Passo 2 — ativar o ambiente:**
 
-* **Linux / macOS:**
-```bash
-source .venv/bin/activate
+- **Linux / macOS:**
+  ```bash
+  source .venv/bin/activate
+  ```
+- **Windows (PowerShell):**
+  ```powershell
+  .venv\Scripts\Activate.ps1
+  ```
 
-```
+A partir daqui o terminal deve exibir `(.venv)` no início da linha.
 
-
-* **Windows (PowerShell):**
-```powershell
-.venv\Scripts\Activate.ps1
-
-```
-
-
-
-*(A partir deste ponto, o seu terminal deve mostrar `(.venv)` no início da linha de comando).*
-
-> **Nota:** Sempre que abrir um novo terminal para trabalhar no projeto, o primeiro comando a ser executado deve ser a ativação do `.venv`.
+> Se o PowerShell bloquear a ativação, rode uma única vez (como usuário comum):
+> `Set-ExecutionPolicy -Scope CurrentUser RemoteSigned`
 
 ---
 
 ## 3. Instalação das Dependências
 
-Com o ambiente virtual ativado, atualize o gerenciador de pacotes (`pip`) e instale as dependências do projeto em modo editável:
+Com o `.venv` ativado:
 
 ```bash
 pip install --upgrade pip
-pip install -e ".[dev]"
-
+pip install -r requirements.txt
 ```
 
-A flag `-e` garante que as mudanças feitas no código sejam refletidas imediatamente, sem a necessidade de reinstalar o projeto a cada alteração.
+A execução dos nós usa `PYTHONPATH=.` a partir da raiz do projeto (sem instalação
+editável), conforme o §8.3 do `CLAUDE.md`.
 
 ---
 
-## 4. Execução do Ambiente Local (Lab)
+## 4. Execução
 
-Para facilitar os testes durante o desenvolvimento, o projeto conta com um script de automação para o PowerShell que sobe um cenário típico (1 tracker + 2 peers) utilizando o **Windows Terminal**.
+A rede distribuída é simulada abrindo **um terminal por nó** em `127.0.0.1`, cada
+processo em uma porta distinta — **sem Docker**. O cenário padrão é 3 trackers + 3 peers.
 
-### Pré-requisitos para execução local (Windows):
+As instruções completas (ordem de inicialização, comandos por terminal, configs YAML e
+roteiro de demonstração) serão adicionadas aqui na Fase 7 do plano de implementação.
 
-1. **Windows Terminal:** Se você usa o Windows 10 e não o possui, instale via Microsoft Store ou via linha de comando (`winget install Microsoft.WindowsTerminal`). No Windows 11, ele já é nativo.
-2. **Permissão de execução de scripts:** Rode o comando abaixo uma única vez no PowerShell (como usuário comum) para permitir a execução do script:
-```powershell
-Set-ExecutionPolicy -Scope CurrentUser RemoteSigned
+---
 
-```
+## 5. Testes
 
+Com o ambiente ativado, a partir da raiz:
 
-
-### Subindo a rede:
-
-Na raiz do projeto, execute o script de automação:
-
-```powershell
-.\scripts\lab_local.ps1
-
+```bash
+pytest -v
 ```

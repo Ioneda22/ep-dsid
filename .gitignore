@@ -1,10 +1,28 @@
-.idea/
+# Ambiente virtual
 .venv/
+venv/
+
+# Bytecode / caches Python
 __pycache__/
-*.pyc
+*.py[cod]
+*$py.class
 .pytest_cache/
+.mypy_cache/
+.ruff_cache/
+
+# Empacotamento
 *.egg-info/
 build/
 dist/
+
+# IDEs
+.idea/
+.vscode/
+
+# Dados e logs de runtime (§8.5 — recriados na primeira execução)
+data/
+logs/
+
+# Locais
 CLAUDE.local.md
 ~/.peerspot/

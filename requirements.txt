@@ -1,0 +1,13 @@
+# PeerSpot — dependências (stack obrigatória do §2 do CLAUDE.md)
+# Tudo o mais usado é stdlib: socket, threading, sqlite3, hashlib, json, logging, uuid.
+
+# API peer <-> tracker (REST sobre HTTP, async nativo)
+fastapi>=0.115
+uvicorn[standard]>=0.32
+
+# Configuração (config/*.yaml)
+pyyaml>=6.0
+
+# Testes
+pytest>=8.0
+pytest-asyncio>=0.24
