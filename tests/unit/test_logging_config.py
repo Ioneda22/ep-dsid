@@ -2,6 +2,8 @@
 
 from __future__ import annotations
 
+from typing import Iterator
+
 import logging
 from pathlib import Path
 
@@ -9,9 +11,10 @@ import pytest
 
 from src.common.logging_config import setup_logging
 
-
+# fixture prepara limpa o ambiente de teste antes do yield seria a preparação antes
+# do teste rodar depois do yield é limpando o ambiente
 @pytest.fixture(autouse=True)
-def _limpa_logger_raiz() -> None:
+def _limpa_logger_raiz() -> Iterator[None]:
     """Remove handlers do logger raiz após cada teste para evitar vazamento."""
     yield
     root = logging.getLogger()

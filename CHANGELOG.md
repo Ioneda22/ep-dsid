@@ -22,11 +22,15 @@ e o projeto segue [Versionamento Semântico](https://semver.org/lang/pt-BR/).
   - `chunking.py` — `split_file`, `join_chunks`, `chunk_count`; chunk
     default de 256 KiB (§7.3).
   - `protocol.py` — framing TCP por `\n` para JSON e `header+payload`
-    para chunks. **Toda recepção passa pela classe `MessageReader`**
-    (única API de leitura): mantém buffer interno entre chamadas,
-    tratando coalescimento TCP de mensagens em qualquer cenário
-    (one-shot ou conexão persistente). Funções de módulo expostas:
-    `send_json_line`, `send_chunk`, `recv_exact` (primitiva).
+    para chunks. **Toda recepção passa por `MessageReader.recv_message`**
+    (método único): mantém buffer interno entre chamadas tratando
+    coalescimento TCP, e decide pela presença de `payload_bytes` no
+    cabeçalho se a mensagem é JSON-pura (`payload=None`) ou se carrega
+    payload binário (`payload=bytes`, possivelmente vazio quando
+    `payload_bytes=0`). Não há `recv_json_line`/`recv_chunk` separados —
+    obrigar o receptor a adivinhar o tipo enviado pelo emissor é um
+    foot-gun cujo erro só aparece sob coalescimento. Funções de módulo
+    expostas: `send_json_line`, `send_chunk`, `recv_exact` (primitiva).
   - `logging_config.py` — `setup_logging` com handlers de arquivo e
     `stderr`, idempotente.
   - `config.py` — `load_yaml` e `require_keys` com `ConfigError`.
@@ -35,11 +39,12 @@ e o projeto segue [Versionamento Semântico](https://semver.org/lang/pt-BR/).
     `MALFORMED_MESSAGE`, `INTERNAL_ERROR`; hierarquia de exceções
     `PeerSpotError` + subclasses; `build_error_message`.
 - Testes unitários em `tests/unit/` cobrindo todos os módulos acima
-  (50 testes, 100% passando em < 1 s): `test_messages.py`, `test_hashing.py`,
+  (59 testes, 100% passando em < 1 s): `test_messages.py`, `test_hashing.py`,
   `test_chunking.py` (incl. arquivo cujo tamanho NÃO é múltiplo do chunk size),
   `test_protocol.py` (roundtrip via `socket.socketpair`, payload > 256 KiB,
-  coalescimento TCP, conexão fechada), `test_errors.py`, `test_config.py`,
-  `test_logging_config.py`.
+  coalescimento TCP, conexão fechada, mistura JSON-pura/chunk no mesmo
+  reader, travas arquiteturais contra reintrodução das APIs separadas),
+  `test_errors.py`, `test_config.py`, `test_logging_config.py`.
 - `pytest.ini` com `testpaths = tests`.
 - Setup do projeto: estrutura de diretórios conforme §3 do `CLAUDE.md`
   (pacotes `src/common`, `src/tracker`, `src/peer` com módulos vazios, `tests/`,

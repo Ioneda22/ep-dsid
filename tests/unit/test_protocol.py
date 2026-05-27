@@ -3,8 +3,8 @@
 Usa ``socket.socketpair`` para roundtrip sem rede real. No Windows o socketpair
 da stdlib emula com AF_INET — funciona normalmente para nossos propósitos.
 
-Toda recepção passa pelo :class:`MessageReader`, que é a única API de leitura
-do PeerSpot (cf. docstring de ``src/common/protocol.py``).
+Toda recepção passa pelo método único :meth:`MessageReader.recv_message`
+(cf. docstring de ``src/common/protocol.py``).
 """
 
 from __future__ import annotations
@@ -31,16 +31,18 @@ def _socketpair() -> tuple[socket.socket, socket.socket]:
 
 
 # ---------------------------------------------------------------------------
-# JSON line roundtrip
+# JSON-pura: cabeçalho sem payload_bytes → payload retornado é None
 # ---------------------------------------------------------------------------
 
 
-def test_roundtrip_json_line_simples() -> None:
+def test_roundtrip_json_pura_simples() -> None:
     a, b = _socketpair()
     try:
         msg = {"type": "PEER_HELLO", "nome_peer": "alice", "ip": "127.0.0.1", "porta": 7001}
         send_json_line(a, msg)
-        assert MessageReader(b).recv_json_line() == msg
+        header, payload = MessageReader(b).recv_message()
+        assert header == msg
+        assert payload is None
     finally:
         a.close()
         b.close()
@@ -52,18 +54,22 @@ def test_roundtrip_request_response() -> None:
     try:
         req = {"type": "CHUNK_LIST_REQUEST", "hash": "h" * 64}
         send_json_line(a, req)
-        assert MessageReader(b).recv_json_line() == req
+        h, p = MessageReader(b).recv_message()
+        assert h == req
+        assert p is None
 
         resp = {"type": "CHUNK_LIST", "hash": "h" * 64, "chunks_disponiveis": [0, 2, 4]}
         send_json_line(b, resp)
-        assert MessageReader(a).recv_json_line() == resp
+        h, p = MessageReader(a).recv_message()
+        assert h == resp
+        assert p is None
     finally:
         a.close()
         b.close()
 
 
-def test_multiplos_json_lines_consecutivos() -> None:
-    """Várias linhas JSON em sequência — mesmo reader, mesmo socket."""
+def test_multiplas_mensagens_json_puras_consecutivas() -> None:
+    """Várias mensagens JSON-puras em sequência — mesmo reader, mesmo socket."""
     a, b = _socketpair()
     try:
         msgs = [
@@ -75,14 +81,16 @@ def test_multiplos_json_lines_consecutivos() -> None:
             send_json_line(a, m)
         reader = MessageReader(b)
         for esperado in msgs:
-            assert reader.recv_json_line() == esperado
+            h, p = reader.recv_message()
+            assert h == esperado
+            assert p is None
     finally:
         a.close()
         b.close()
 
 
 # ---------------------------------------------------------------------------
-# Chunk (header + payload)
+# Chunk (header + payload): cabeçalho com payload_bytes → payload é bytes
 # ---------------------------------------------------------------------------
 
 
@@ -97,7 +105,7 @@ def test_roundtrip_chunk_payload_pequeno() -> None:
             "payload_bytes": len(payload),
         }
         send_chunk(a, header, payload)
-        h, p = MessageReader(b).recv_chunk()
+        h, p = MessageReader(b).recv_message()
         assert h == header
         assert p == payload
     finally:
@@ -122,18 +130,19 @@ def test_roundtrip_chunk_payload_grande() -> None:
 
         t = threading.Thread(target=send_side)
         t.start()
-        h, p = MessageReader(b).recv_chunk()
+        h, p = MessageReader(b).recv_message()
         t.join()
 
         assert h == header
         assert p == payload
-        assert len(p) == header["payload_bytes"]
+        assert p is not None and len(p) == header["payload_bytes"]
     finally:
         a.close()
         b.close()
 
 
 def test_chunk_payload_zero_bytes() -> None:
+    """payload_bytes=0 retorna bytes vazios (não None), distinto da JSON-pura."""
     a, b = _socketpair()
     try:
         header = {
@@ -143,9 +152,10 @@ def test_chunk_payload_zero_bytes() -> None:
             "payload_bytes": 0,
         }
         send_chunk(a, header, b"")
-        h, p = MessageReader(b).recv_chunk()
+        h, p = MessageReader(b).recv_message()
         assert h == header
         assert p == b""
+        assert p is not None  # Distinto de JSON-pura
     finally:
         a.close()
         b.close()
@@ -163,7 +173,7 @@ def test_chunk_coalescimento_tcp() -> None:
             "payload_bytes": len(payload),
         }
         send_chunk(a, header, payload)
-        h, p = MessageReader(b).recv_chunk()
+        h, p = MessageReader(b).recv_message()
         assert h == header
         assert p == payload
     finally:
@@ -183,7 +193,7 @@ def test_send_chunk_payload_bytes_inconsistente() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Caso central da Saída 2: múltiplas mensagens reusando a mesma conexão
+# Caso central: múltiplas mensagens reusando a mesma conexão
 # ---------------------------------------------------------------------------
 
 
@@ -208,7 +218,7 @@ def test_multiplos_chunks_na_mesma_conexao() -> None:
 
         reader = MessageReader(b)
         for i, esperado in enumerate(payloads):
-            h, p = reader.recv_chunk()
+            h, p = reader.recv_message()
             assert h["chunk_index"] == i
             assert h["payload_bytes"] == len(esperado)
             assert p == esperado
@@ -217,11 +227,13 @@ def test_multiplos_chunks_na_mesma_conexao() -> None:
         b.close()
 
 
-def test_mistura_json_line_e_chunk_mesmo_reader() -> None:
+def test_mistura_json_pura_e_chunk_mesmo_reader() -> None:
     """Fluxo real do downloader (§7.4 CLAUDE.md): CHUNK_LIST seguida de CHUNK_DATA.
 
-    Mesma conexão, mesmo reader. Sem buffer compartilhado, o início do
-    cabeçalho do CHUNK_DATA seria perdido ao ler o CHUNK_LIST.
+    Mesma conexão, mesmo reader, **mesmo método**. Sem buffer compartilhado, o
+    início do cabeçalho do CHUNK_DATA seria perdido ao ler o CHUNK_LIST. Sem
+    o método unificado, o receptor precisaria escolher manualmente entre dois
+    leitores — exatamente o foot-gun que ``recv_message`` elimina.
     """
     cliente, servidor = _socketpair()
     try:
@@ -242,11 +254,12 @@ def test_mistura_json_line_e_chunk_mesmo_reader() -> None:
         )
 
         reader = MessageReader(cliente)
-        primeiro = reader.recv_json_line()
-        assert primeiro["type"] == "CHUNK_LIST"
-        assert primeiro["chunks_disponiveis"] == [0, 1, 2]
+        primeiro_h, primeiro_p = reader.recv_message()
+        assert primeiro_h["type"] == "CHUNK_LIST"
+        assert primeiro_h["chunks_disponiveis"] == [0, 1, 2]
+        assert primeiro_p is None
 
-        h, p = reader.recv_chunk()
+        h, p = reader.recv_message()
         assert h["chunk_index"] == 1
         assert p == payload
     finally:
@@ -268,10 +281,13 @@ def test_chunk_payload_zero_seguido_de_outra_mensagem() -> None:
         send_json_line(a, {"type": "PEER_LEAVE", "nome_peer": "x"})
 
         reader = MessageReader(b)
-        h, p = reader.recv_chunk()
+        h, p = reader.recv_message()
         assert h == header
         assert p == b""
-        assert reader.recv_json_line() == {"type": "PEER_LEAVE", "nome_peer": "x"}
+
+        h2, p2 = reader.recv_message()
+        assert h2 == {"type": "PEER_LEAVE", "nome_peer": "x"}
+        assert p2 is None
     finally:
         a.close()
         b.close()
@@ -282,35 +298,45 @@ def test_chunk_payload_zero_seguido_de_outra_mensagem() -> None:
 # ---------------------------------------------------------------------------
 
 
-def test_conexao_fechada_durante_json_line() -> None:
+def test_conexao_fechada_durante_leitura() -> None:
     a, b = _socketpair()
     a.close()
     try:
         with pytest.raises(ConnectionClosedError):
-            MessageReader(b).recv_json_line()
+            MessageReader(b).recv_message()
     finally:
         b.close()
 
 
-def test_json_invalido_em_json_line() -> None:
+def test_json_invalido_no_cabecalho() -> None:
     a, b = _socketpair()
     try:
         a.sendall(b"isto nao eh json\n")
         with pytest.raises(ProtocolError):
-            MessageReader(b).recv_json_line()
+            MessageReader(b).recv_message()
     finally:
         a.close()
         b.close()
 
 
-def test_chunk_header_sem_payload_bytes() -> None:
-    """Cabeçalho sem 'payload_bytes' válido deve levantar ProtocolError."""
+def test_payload_bytes_invalido_no_cabecalho() -> None:
+    """payload_bytes presente mas com valor inválido (não int ou negativo)."""
     a, b = _socketpair()
     try:
-        # Header sem payload_bytes
-        a.sendall(b'{"type": "CHUNK_DATA"}\n')
+        a.sendall(b'{"type": "CHUNK_DATA", "payload_bytes": -1}\n')
         with pytest.raises(ProtocolError, match="payload_bytes"):
-            MessageReader(b).recv_chunk()
+            MessageReader(b).recv_message()
+    finally:
+        a.close()
+        b.close()
+
+
+def test_payload_bytes_nao_inteiro() -> None:
+    a, b = _socketpair()
+    try:
+        a.sendall(b'{"type": "CHUNK_DATA", "payload_bytes": "abc"}\n')
+        with pytest.raises(ProtocolError, match="payload_bytes"):
+            MessageReader(b).recv_message()
     finally:
         a.close()
         b.close()
@@ -347,23 +373,39 @@ def test_recv_exact_n_negativo() -> None:
 
 
 # ---------------------------------------------------------------------------
-# Garantia da Saída 2: as funções de módulo NÃO devem mais existir
+# Travas arquiteturais: APIs antigas não devem mais existir
 # ---------------------------------------------------------------------------
 
 
 def test_funcoes_de_modulo_removidas() -> None:
-    """Após a Saída 2, recv_json_line/recv_chunk de módulo não existem mais.
+    """Funções one-shot de módulo foram removidas (Saída 2).
 
-    Toda leitura deve passar por MessageReader. Este teste é uma trava
-    arquitetural contra reintrodução acidental das funções one-shot.
+    Toda leitura passa por MessageReader.recv_message.
     """
     from src.common import protocol
 
     assert not hasattr(protocol, "recv_json_line"), (
         "recv_json_line de módulo foi removida intencionalmente (Saída 2); "
-        "use MessageReader(sock).recv_json_line()"
+        "use MessageReader(sock).recv_message()"
     )
     assert not hasattr(protocol, "recv_chunk"), (
         "recv_chunk de módulo foi removida intencionalmente (Saída 2); "
-        "use MessageReader(sock).recv_chunk()"
+        "use MessageReader(sock).recv_message()"
+    )
+
+
+def test_metodos_separados_do_reader_removidos() -> None:
+    """recv_json_line/recv_chunk como métodos de MessageReader também foram removidos.
+
+    Manter dois métodos forçava o caller a adivinhar o tipo enviado pelo emissor
+    — mesma classe de foot-gun das funções one-shot. recv_message decide pelo
+    próprio cabeçalho. Esta trava impede reintrodução acidental.
+    """
+    assert not hasattr(MessageReader, "recv_json_line"), (
+        "MessageReader.recv_json_line foi removido; use recv_message() — "
+        "o próprio cabeçalho decide se há payload"
+    )
+    assert not hasattr(MessageReader, "recv_chunk"), (
+        "MessageReader.recv_chunk foi removido; use recv_message() — "
+        "o próprio cabeçalho decide se há payload"
     )

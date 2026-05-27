@@ -33,9 +33,11 @@ def setup_logging(log_path: Path, level: str = "INFO") -> logging.Logger:
     Raises:
         ValueError: Se ``level`` não for um nível conhecido.
     """
-    numeric_level = logging.getLevelName(level.upper())
-    if not isinstance(numeric_level, int):
+    mapping = logging.getLevelNamesMapping()
+    nivel_upper = level.upper()
+    if nivel_upper not in mapping:
         raise ValueError(f"Nível de log inválido: {level!r}")
+    numeric_level = mapping[nivel_upper]
 
     log_path.parent.mkdir(parents=True, exist_ok=True)
 

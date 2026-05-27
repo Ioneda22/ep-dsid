@@ -9,14 +9,22 @@ Convenções de framing (cf. §4.8 e §4.9 do ``CLAUDE.md``):
   *imediatamente* do payload binário de exatamente ``payload_bytes`` bytes,
   na mesma conexão TCP.
 
-Recepção sempre via :class:`MessageReader`. O reader mantém um buffer
-interno entre leituras consecutivas, evitando perda de bytes quando o TCP
-coalesce mensagens em um único ``recv`` — fenômeno comum em loopback e
-realidade obrigatória no peer↔peer, onde várias mensagens trafegam na
-mesma conexão (§7.1/§7.4 do ``CLAUDE.md``). Mesmo em conexões one-shot
-(e.g. flooding ``SYNC_TABLE`` tracker→tracker), o reader é a API: o custo
-de uma instância extra é desprezível e a uniformidade elimina a categoria
-de bug "esqueci de usar o reader".
+Recepção sempre via :class:`MessageReader`, exclusivamente pelo método
+:meth:`MessageReader.recv_message`. O reader mantém um buffer interno entre
+leituras consecutivas, evitando perda de bytes quando o TCP coalesce
+mensagens em um único ``recv`` — fenômeno comum em loopback e realidade
+obrigatória no peer↔peer, onde várias mensagens trafegam na mesma conexão
+(§7.1/§7.4 do ``CLAUDE.md``). Mesmo em conexões one-shot (e.g. flooding
+``SYNC_TABLE`` tracker→tracker), o reader é a API: o custo de uma instância
+extra é desprezível e a uniformidade elimina a categoria de bug "esqueci
+de usar o reader".
+
+O método único ``recv_message`` decide pelo próprio cabeçalho se há
+payload binário em seguida (presença do campo ``payload_bytes``). Não há
+``recv_json_line`` / ``recv_chunk`` separados: oferecer dois métodos onde
+o receptor precisa adivinhar o tipo enviado pelo emissor é a mesma classe
+de foot-gun das funções one-shot de módulo (também removidas) — o erro só
+aparece sob carga, quando o TCP coalesce header+payload.
 
 ``MessageReader`` **não é thread-safe**: cada socket deve ser lido por uma
 única thread, ou o acesso ao reader sincronizado externamente. No PeerSpot
@@ -199,50 +207,48 @@ class MessageReader:
         """Ajusta o timeout do socket subjacente."""
         self.sock.settimeout(timeout)
 
-    def recv_json_line(self, timeout: float | None = None) -> dict[str, Any]:
-        """Lê uma mensagem JSON terminada em ``\\n``.
+    def recv_message(
+        self, timeout: float | None = None
+    ) -> tuple[dict[str, Any], bytes | None]:
+        """Lê a próxima mensagem da conexão, JSON-pura ou JSON+payload.
 
-        Bytes que cheguem após o ``\\n`` são preservados no buffer interno
-        e usados na próxima chamada — pode ser o início do próximo registro
-        (outra ``recv_json_line``) ou de um payload binário (``recv_chunk``).
+        Toda mensagem do PeerSpot começa por um cabeçalho JSON terminado em
+        ``\\n``. Se o cabeçalho contiver o campo ``payload_bytes``, um payload
+        binário de exatamente esse tamanho é lido em seguida na mesma chamada
+        — caso de ``CHUNK_DATA``. Caso contrário, a mensagem é JSON-pura e o
+        payload retornado é ``None``.
+
+        Quem decide se há payload é o próprio cabeçalho: o receptor nunca
+        precisa adivinhar o tipo enviado pelo emissor, o que elimina por
+        construção a possibilidade de descasamento (ver docstring do módulo).
+
+        Bytes excedentes (coalescidos no mesmo ``recv``) ficam no buffer
+        interno para a próxima chamada.
 
         Args:
             timeout: Timeout em segundos; ``None`` mantém o atual.
 
         Returns:
-            Dicionário decodificado.
+            Tupla ``(header, payload)``. ``payload`` é ``None`` para mensagens
+            JSON-puras e ``bytes`` (possivelmente vazio) quando o cabeçalho
+            declarou ``payload_bytes``.
 
         Raises:
-            ConnectionClosedError: Se a conexão fechar antes do delimitador.
-            ProtocolError: Se o JSON for inválido.
+            ConnectionClosedError: Se a conexão fechar antes de completar.
+            ProtocolError: Se o JSON for inválido ou ``payload_bytes`` não
+                for um inteiro >= 0.
             socket.timeout: Se exceder o timeout configurado.
         """
         if timeout is not None:
             self.sock.settimeout(timeout)
         line, self._buf = _read_line(self.sock, self._buf)
-        return _decode_json_line(line)
-
-    def recv_chunk(self) -> tuple[dict[str, Any], bytes]:
-        """Lê um cabeçalho JSON seguido do payload binário.
-
-        Trata coalescimento TCP: bytes recebidos junto com o cabeçalho são
-        usados como prefixo do payload; bytes que chegarem além de
-        ``payload_bytes`` ficam no buffer para a próxima leitura (geralmente
-        o cabeçalho da próxima resposta na mesma conexão).
-
-        Returns:
-            Tupla ``(header, payload)``.
-
-        Raises:
-            ProtocolError: Se o cabeçalho for inválido.
-            ConnectionClosedError: Se a conexão fechar prematuramente.
-        """
-        line, self._buf = _read_line(self.sock, self._buf)
         header = _decode_json_line(line)
-        pb = header.get("payload_bytes")
+        if "payload_bytes" not in header:
+            return header, None
+        pb = header["payload_bytes"]
         if not isinstance(pb, int) or pb < 0:
             raise ProtocolError(
-                f"Cabeçalho sem 'payload_bytes' inteiro >= 0: {header!r}"
+                f"'payload_bytes' deve ser inteiro >= 0; recebido: {pb!r}"
             )
         if len(self._buf) >= pb:
             payload = bytes(self._buf[:pb])
