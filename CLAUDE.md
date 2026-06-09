@@ -532,3 +532,53 @@ Se algo neste documento parece ambíguo ou conflitar com `main.tex`:
 - **Releia a seção correspondente do `main.tex`** primeiro.
 - Se persistir a dúvida, **pergunte ao usuário** antes de codar.
 - Não invente comportamento "razoável" — o domínio é cheio de pegadinhas onde "razoável" diverge da especificação.
+
+---
+
+## 14. Diretrizes de Desenvolvimento Ágil e Boas Práticas
+
+> Estas diretrizes valem para **todo** o código de `src/` e `tests/`. Complementam as Convenções da §4 — em caso de conflito pontual, a §4 (que reflete o `main.tex`) prevalece.
+
+### 14.1 Estilo de Código
+
+- **Funções: 4–20 linhas.** Acima disso, quebre em funções menores com nomes que revelem a intenção.
+- **Arquivos: abaixo de 500 linhas.** Divida por responsabilidade (a estrutura da §3 já força isso — mantenha).
+- **Uma coisa por função, uma responsabilidade por módulo (SRP).** O handler não faz I/O de socket; o socket não faz regra de negócio.
+- **Nomes específicos e únicos.** Evite `data`, `handler`, `manager`, `process`, `info`. Prefira nomes que retornem poucos hits no `grep` (`apply_sync_entry`, `expire_tombstones`, `recv_chunk`).
+- **Type hints explícitos em tudo** (já obrigatório na §4.1). Sem `Any`, sem `dict`/`list` crus quando há um `TypedDict`/`dataclass` (use os de `messages.py`). `from __future__ import annotations` no topo de cada módulo.
+- **Sem duplicação.** Lógica compartilhada entre peer e tracker mora em `src/common/`. Se copiar-colar, extraia.
+- **Early returns em vez de ifs aninhados.** Máximo de 2 níveis de indentação no corpo de uma função.
+- **Mensagens de exceção incluem o valor ofensor e o formato esperado.** Use as exceções de `src/common/errors.py`; ex.: `raise InvalidHash(f"hash esperado sha256 de 64 hex, recebido {valor!r}")`.
+
+### 14.2 Comentários
+
+- **Preserve comentários existentes** em refatorações — eles carregam intenção e contexto.
+- **Escreva o PORQUÊ, não o O QUÊ.** Pule `# incrementa i` antes de `i += 1`.
+- **Docstrings (estilo Google) em funções públicas:** intenção + um exemplo de uso, conforme §4.2.
+- **Referencie a origem** quando uma linha existe por causa de uma decisão específica: cite a seção do `main.tex` (ex.: `# LWW: empate vence maior tracker_id — main.tex §7.2`) ou o SHA do commit.
+
+### 14.3 Testes
+
+- **Roda com um único comando: `pytest -v`** (a suíte inteira em < 60s, §10).
+- **Toda função nova ganha um teste.** Toda correção de bug ganha um teste de regressão que falha antes do fix.
+- **Mocke I/O externo com fakes nomeados**, não stubs inline. Para sockets/trackers na integração, prefira **subprocessos/threads reais** em `127.0.0.1` com portas dinâmicas (§10) a mocks de socket.
+- **Determinismo:** injete `time.time` por parâmetro (LWW, tombstones, failure detector) — nunca `monkeypatch` global (§10).
+- **Testes F.I.R.S.T:** rápidos, independentes, repetíveis, auto-validáveis e escritos junto com o código.
+- **Não avance de fase** (§9) sem os testes da fase anterior passando.
+
+### 14.4 Dependências e Acoplamento
+
+- **Injete dependências por construtor/parâmetro**, não via global ou import de estado mutável. Ex.: `Index`, conexão SQLite e config entram nos `handlers` por parâmetro — facilita o teste.
+- **Nada de estado global mutável compartilhado** além do `Index` protegido por lock (§4.5).
+- **Não adicione bibliotecas** fora da lista da §2 sem perguntar (§11.10).
+
+### 14.5 Formatação
+
+- **Use o formatador padrão da linguagem.** Rode `black src/ tests/` (e, se disponível, `ruff` para lint). Não discuta estilo além do que o formatador decide.
+- Linhas, aspas e imports seguem o `black` — não os ajuste à mão.
+
+### 14.6 Logging
+
+- **`logging` estruturado para observabilidade/debug** (já obrigatório na §4.3); inclua `tracker_id`/`nome_peer`/`query_id` nos registros relevantes.
+- **Texto puro (`print`) só na CLI do peer** (`src/peer/cli.py`), que é a única saída voltada ao usuário.
+- **Nunca suprima exceção em silêncio:** `logger.exception()` antes de tratar (§11.7).
