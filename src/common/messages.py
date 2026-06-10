@@ -1,8 +1,9 @@
 """Definições das mensagens do protocolo PeerSpot (Listing 7.2 do main.tex).
 
-Todas as mensagens trocadas entre peers, entre tracker e peer, e entre trackers
-são representadas como ``TypedDict`` para validação estática. Em runtime, as
-mensagens trafegam como ``dict[str, Any]`` serializados em JSON.
+Todas as mensagens trocadas entre peers, entre tracker e peer, e entre
+trackers são modelos **pydantic** (``BaseModel``): servem de validação de
+schema em runtime (inclusive como corpos de requisição do FastAPI) e de
+type hints estáticos. Na rede, trafegam como JSON (``model_dump()``).
 
 Mantenha estas definições alinhadas literalmente com o Listing 7.2 do
 ``main.tex``. Qualquer divergência deve ser questionada antes de codar.
@@ -10,42 +11,44 @@ Mantenha estas definições alinhadas literalmente com o Listing 7.2 do
 
 from __future__ import annotations
 
-from typing import Any, Literal, TypedDict
+from typing import Any, Literal
+
+from pydantic import BaseModel, ValidationError
 
 # ---------------------------------------------------------------------------
 # 1. Entrada do peer na rede e manutenção de presença
 # ---------------------------------------------------------------------------
 
 
-class PeerHello(TypedDict):
+class PeerHello(BaseModel):
     """Apresentação inicial do peer ao tracker (peer -> tracker)."""
 
-    type: Literal["PEER_HELLO"]
+    type: Literal["PEER_HELLO"] = "PEER_HELLO"
     nome_peer: str
     ip: str
     porta: int
 
 
-class PeerLeave(TypedDict):
+class PeerLeave(BaseModel):
     """Peer saindo da rede de forma ordenada (peer -> tracker)."""
 
-    type: Literal["PEER_LEAVE"]
+    type: Literal["PEER_LEAVE"] = "PEER_LEAVE"
     nome_peer: str
 
 
-class UpdateIp(TypedDict):
+class UpdateIp(BaseModel):
     """Notificação de mudança de IP (peer -> tracker)."""
 
-    type: Literal["UPDATE_IP"]
+    type: Literal["UPDATE_IP"] = "UPDATE_IP"
     nome_peer: str
     novo_ip: str
     porta: int
 
 
-class SeedReport(TypedDict):
+class SeedReport(BaseModel):
     """Relatório periódico de seed (peer -> tracker, a cada 3 minutos)."""
 
-    type: Literal["SEED_REPORT"]
+    type: Literal["SEED_REPORT"] = "SEED_REPORT"
     nome_peer: str
     ip: str
     porta: int
@@ -57,41 +60,42 @@ class SeedReport(TypedDict):
 # ---------------------------------------------------------------------------
 
 
-class RegisterFile(TypedDict, total=False):
+class RegisterFile(BaseModel):
     """Registro de música (peer -> tracker).
 
-    Os campos ``nome``, ``tamanho`` e ``n_chunks`` são opcionais ao re-registrar
-    após download — o tracker já os conhece do upload original.
+    Os campos ``nome``, ``tamanho`` e ``n_chunks`` são opcionais ao
+    re-registrar após download — o tracker já os conhece do upload
+    original (main.tex §7.2).
     """
 
-    type: Literal["REGISTER_FILE"]
+    type: Literal["REGISTER_FILE"] = "REGISTER_FILE"
     nome_peer: str
     hash: str
-    nome: str
-    tamanho: int
-    n_chunks: int
+    nome: str | None = None
+    tamanho: int | None = None
+    n_chunks: int | None = None
 
 
-class SearchFile(TypedDict):
+class SearchFile(BaseModel):
     """Busca de música (peer -> tracker)."""
 
-    type: Literal["SEARCH_FILE"]
+    type: Literal["SEARCH_FILE"] = "SEARCH_FILE"
     query_id: str
     query: str
-    ttl: int
+    ttl: int  # valor inicial recomendado: 3 — main.tex §7.2
 
 
-class SearchForward(TypedDict):
+class SearchForward(BaseModel):
     """Roteamento de busca entre trackers (tracker -> tracker)."""
 
-    type: Literal["SEARCH_FORWARD"]
+    type: Literal["SEARCH_FORWARD"] = "SEARCH_FORWARD"
     query_id: str
     query: str
     ttl: int
     origem_tracker: str
 
 
-class SearchResultPeer(TypedDict):
+class SearchResultPeer(BaseModel):
     """Entrada de peer dentro de um resultado de busca."""
 
     nome_peer: str
@@ -99,7 +103,7 @@ class SearchResultPeer(TypedDict):
     porta: int
 
 
-class SearchResultEntry(TypedDict):
+class SearchResultEntry(BaseModel):
     """Entrada de resultado de busca (um hash + seus peers)."""
 
     hash: str
@@ -107,10 +111,10 @@ class SearchResultEntry(TypedDict):
     peers: list[SearchResultPeer]
 
 
-class SearchResult(TypedDict):
+class SearchResult(BaseModel):
     """Resposta com peers disponíveis (tracker -> peer ou tracker -> tracker)."""
 
-    type: Literal["SEARCH_RESULT"]
+    type: Literal["SEARCH_RESULT"] = "SEARCH_RESULT"
     query_id: str
     resultados: list[SearchResultEntry]
 
@@ -120,33 +124,33 @@ class SearchResult(TypedDict):
 # ---------------------------------------------------------------------------
 
 
-class ChunkListRequest(TypedDict):
+class ChunkListRequest(BaseModel):
     """Solicitação da lista de chunks que um peer possui (peer -> peer)."""
 
-    type: Literal["CHUNK_LIST_REQUEST"]
+    type: Literal["CHUNK_LIST_REQUEST"] = "CHUNK_LIST_REQUEST"
     hash: str
 
 
-class ChunkList(TypedDict):
+class ChunkList(BaseModel):
     """Resposta com a lista de chunks disponíveis (peer -> peer)."""
 
-    type: Literal["CHUNK_LIST"]
+    type: Literal["CHUNK_LIST"] = "CHUNK_LIST"
     hash: str
     chunks_disponiveis: list[int]
 
 
-class ChunkRequest(TypedDict):
+class ChunkRequest(BaseModel):
     """Requisição de chunk (peer -> peer)."""
 
-    type: Literal["CHUNK_REQUEST"]
+    type: Literal["CHUNK_REQUEST"] = "CHUNK_REQUEST"
     hash: str
     chunk_index: int
 
 
-class ChunkDataHeader(TypedDict):
+class ChunkDataHeader(BaseModel):
     """Cabeçalho que precede o payload binário de um chunk (peer -> peer)."""
 
-    type: Literal["CHUNK_DATA"]
+    type: Literal["CHUNK_DATA"] = "CHUNK_DATA"
     hash: str
     chunk_index: int
     payload_bytes: int
@@ -157,10 +161,10 @@ class ChunkDataHeader(TypedDict):
 # ---------------------------------------------------------------------------
 
 
-class PeerLeaveFile(TypedDict):
+class PeerLeaveFile(BaseModel):
     """Remoção explícita de um arquivo do índice (peer -> tracker)."""
 
-    type: Literal["PEER_LEAVE_FILE"]
+    type: Literal["PEER_LEAVE_FILE"] = "PEER_LEAVE_FILE"
     nome_peer: str
     hash: str
 
@@ -170,7 +174,7 @@ class PeerLeaveFile(TypedDict):
 # ---------------------------------------------------------------------------
 
 
-class SyncTableEntry(TypedDict):
+class SyncTableEntry(BaseModel):
     """Entrada individual dentro de uma SYNC_TABLE."""
 
     hash: str
@@ -180,16 +184,16 @@ class SyncTableEntry(TypedDict):
     ativo: bool
 
 
-class SyncTable(TypedDict):
+class SyncTable(BaseModel):
     """Atualização incremental do índice (tracker -> tracker)."""
 
-    type: Literal["SYNC_TABLE"]
+    type: Literal["SYNC_TABLE"] = "SYNC_TABLE"
     origem: str
     timestamp: float
     entries: list[SyncTableEntry]
 
 
-class FullSyncPeer(TypedDict):
+class FullSyncPeer(BaseModel):
     """Peer dentro de uma entrada de FULL_SYNC (com flag ativo e timestamp)."""
 
     nome_peer: str
@@ -199,7 +203,7 @@ class FullSyncPeer(TypedDict):
     timestamp: float
 
 
-class FullSyncEntry(TypedDict):
+class FullSyncEntry(BaseModel):
     """Entrada de FULL_SYNC: arquivo + peers conhecidos."""
 
     hash: str
@@ -209,7 +213,7 @@ class FullSyncEntry(TypedDict):
     peers: list[FullSyncPeer]
 
 
-class FullSyncTracker(TypedDict):
+class FullSyncTracker(BaseModel):
     """Tracker dentro da lista ``trackers_conhecidos`` de um FULL_SYNC."""
 
     tracker_id: str
@@ -217,10 +221,10 @@ class FullSyncTracker(TypedDict):
     porta: int
 
 
-class FullSync(TypedDict):
+class FullSync(BaseModel):
     """Sincronização completa do índice (tracker -> tracker)."""
 
-    type: Literal["FULL_SYNC"]
+    type: Literal["FULL_SYNC"] = "FULL_SYNC"
     origem: str
     entries: list[FullSyncEntry]
     trackers_conhecidos: list[FullSyncTracker]
@@ -231,16 +235,16 @@ class FullSync(TypedDict):
 # ---------------------------------------------------------------------------
 
 
-class TrackerRejoin(TypedDict):
+class TrackerRejoin(BaseModel):
     """Novo tracker se apresentando ao bootstrap node (tracker -> tracker)."""
 
-    type: Literal["TRACKER_REJOIN"]
+    type: Literal["TRACKER_REJOIN"] = "TRACKER_REJOIN"
     tracker_id: str
     ip: str
     porta: int
 
 
-class TrackerAnnounceNew(TypedDict):
+class TrackerAnnounceNew(BaseModel):
     """Descritor do novo tracker dentro de TRACKER_ANNOUNCE."""
 
     tracker_id: str
@@ -248,17 +252,17 @@ class TrackerAnnounceNew(TypedDict):
     porta: int
 
 
-class TrackerAnnounce(TypedDict):
+class TrackerAnnounce(BaseModel):
     """Anúncio de novo tracker aos demais (tracker -> tracker, flooding TCP)."""
 
-    type: Literal["TRACKER_ANNOUNCE"]
+    type: Literal["TRACKER_ANNOUNCE"] = "TRACKER_ANNOUNCE"
     novo_tracker: TrackerAnnounceNew
 
 
-class ReassignTracker(TypedDict):
+class ReassignTracker(BaseModel):
     """Reatribuição de peer ao tracker reintegrado (tracker ativo -> peer)."""
 
-    type: Literal["REASSIGN_TRACKER"]
+    type: Literal["REASSIGN_TRACKER"] = "REASSIGN_TRACKER"
     peer_nome: str
     novo_tracker_ip: str
     novo_tracker_porta: int
@@ -269,10 +273,10 @@ class ReassignTracker(TypedDict):
 # ---------------------------------------------------------------------------
 
 
-class ErrorMessage(TypedDict):
+class ErrorMessage(BaseModel):
     """Resposta de erro a qualquer requisição (qualquer -> qualquer)."""
 
-    type: Literal["ERROR"]
+    type: Literal["ERROR"] = "ERROR"
     ref_type: str
     ref_id: str
     code: str
@@ -280,36 +284,51 @@ class ErrorMessage(TypedDict):
 
 
 # ---------------------------------------------------------------------------
-# Tabela de tipos válidos e validação leve em runtime
+# Registro de tipos válidos e validação em runtime
 # ---------------------------------------------------------------------------
 
-
-REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
-    "PEER_HELLO": ("nome_peer", "ip", "porta"),
-    "PEER_LEAVE": ("nome_peer",),
-    "UPDATE_IP": ("nome_peer", "novo_ip", "porta"),
-    "SEED_REPORT": ("nome_peer", "ip", "porta", "hashes"),
-    "REGISTER_FILE": ("nome_peer", "hash"),
-    "SEARCH_FILE": ("query_id", "query", "ttl"),
-    "SEARCH_FORWARD": ("query_id", "query", "ttl", "origem_tracker"),
-    "SEARCH_RESULT": ("query_id", "resultados"),
-    "CHUNK_LIST_REQUEST": ("hash",),
-    "CHUNK_LIST": ("hash", "chunks_disponiveis"),
-    "CHUNK_REQUEST": ("hash", "chunk_index"),
-    "CHUNK_DATA": ("hash", "chunk_index", "payload_bytes"),
-    "PEER_LEAVE_FILE": ("nome_peer", "hash"),
-    "SYNC_TABLE": ("origem", "timestamp", "entries"),
-    "FULL_SYNC": ("origem", "entries", "trackers_conhecidos"),
-    "TRACKER_REJOIN": ("tracker_id", "ip", "porta"),
-    "TRACKER_ANNOUNCE": ("novo_tracker",),
-    "REASSIGN_TRACKER": ("peer_nome", "novo_tracker_ip", "novo_tracker_porta"),
-    "ERROR": ("ref_type", "ref_id", "code", "mensagem"),
+#: Mapa de ``type`` -> modelo pydantic correspondente (os 19 do Listing 7.2).
+MESSAGE_MODELS: dict[str, type[BaseModel]] = {
+    "PEER_HELLO": PeerHello,
+    "PEER_LEAVE": PeerLeave,
+    "UPDATE_IP": UpdateIp,
+    "SEED_REPORT": SeedReport,
+    "REGISTER_FILE": RegisterFile,
+    "SEARCH_FILE": SearchFile,
+    "SEARCH_FORWARD": SearchForward,
+    "SEARCH_RESULT": SearchResult,
+    "CHUNK_LIST_REQUEST": ChunkListRequest,
+    "CHUNK_LIST": ChunkList,
+    "CHUNK_REQUEST": ChunkRequest,
+    "CHUNK_DATA": ChunkDataHeader,
+    "PEER_LEAVE_FILE": PeerLeaveFile,
+    "SYNC_TABLE": SyncTable,
+    "FULL_SYNC": FullSync,
+    "TRACKER_REJOIN": TrackerRejoin,
+    "TRACKER_ANNOUNCE": TrackerAnnounce,
+    "REASSIGN_TRACKER": ReassignTracker,
+    "ERROR": ErrorMessage,
 }
-"""Mapa de ``type`` -> campos obrigatórios para validação leve em runtime."""
+
+
+def _campos_obrigatorios(modelo: type[BaseModel]) -> tuple[str, ...]:
+    return tuple(
+        nome
+        for nome, campo in modelo.model_fields.items()
+        if campo.is_required()
+    )
+
+
+#: Mapa de ``type`` -> campos obrigatórios, derivado dos modelos pydantic.
+#: (``type`` tem default e por isso não aparece; idem aos opcionais de
+#: re-registro do REGISTER_FILE.)
+REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
+    tipo: _campos_obrigatorios(modelo) for tipo, modelo in MESSAGE_MODELS.items()
+}
 
 
 def validate_message(msg: dict[str, Any]) -> str:
-    """Checa minimamente que ``msg`` tem ``type`` conhecido e campos obrigatórios.
+    """Valida ``msg`` contra o modelo pydantic do seu ``type``.
 
     Args:
         msg: Dicionário recém-decodificado do JSON.
@@ -318,19 +337,34 @@ def validate_message(msg: dict[str, Any]) -> str:
         O ``type`` da mensagem.
 
     Raises:
-        ValueError: Se ``type`` estiver ausente, for desconhecido, ou se faltar
-            algum campo obrigatório.
+        ValueError: Se ``type`` estiver ausente ou for desconhecido, se
+            faltar campo obrigatório, ou se algum campo tiver tipo inválido.
     """
     if not isinstance(msg, dict):
         raise ValueError(f"Mensagem deve ser dict; recebido {type(msg).__name__}")
     msg_type = msg.get("type")
     if not isinstance(msg_type, str):
         raise ValueError("Mensagem sem campo 'type' válido")
-    if msg_type not in REQUIRED_FIELDS:
+    modelo = MESSAGE_MODELS.get(msg_type)
+    if modelo is None:
         raise ValueError(f"Tipo de mensagem desconhecido: {msg_type!r}")
-    faltando = [f for f in REQUIRED_FIELDS[msg_type] if f not in msg]
-    if faltando:
-        raise ValueError(
-            f"Mensagem {msg_type} sem campos obrigatórios: {faltando}"
-        )
+    _validar_com_modelo(modelo, msg, msg_type)
     return msg_type
+
+
+def _validar_com_modelo(
+    modelo: type[BaseModel], msg: dict[str, Any], msg_type: str
+) -> None:
+    try:
+        modelo.model_validate(msg)
+    except ValidationError as exc:
+        faltando = [
+            ".".join(str(parte) for parte in erro["loc"])
+            for erro in exc.errors()
+            if erro["type"] == "missing"
+        ]
+        if faltando:
+            raise ValueError(
+                f"Mensagem {msg_type} sem campos obrigatórios: {faltando}"
+            ) from exc
+        raise ValueError(f"Mensagem {msg_type} inválida: {exc}") from exc

@@ -28,9 +28,10 @@
 | Persistência | **SQLite** (`sqlite3` stdlib) | Apenas para dados duráveis do tracker (usuários, playlists) |
 | Índice em memória | `dict` + `threading.Lock()` | Tabelas `nome→hash`, `hash→peers`, `nome_peer→endereço` |
 | Hashing | `hashlib.sha256` | Identificador de arquivos |
+| Mensagens do protocolo | **pydantic v2** (`BaseModel`) | Schema + validação das 19 mensagens em `src/common/messages.py`, reusadas como corpos das rotas FastAPI |
 | Serialização | `json` (stdlib) | Mensagens de controle |
 | Logging | `logging` (stdlib) | Configuração centralizada |
-| Testes | **pytest** + `pytest-asyncio` | Unitários e integração |
+| Testes | **pytest** + `pytest-asyncio` + `httpx` (cliente HTTP dos testes) | Unitários e integração |
 | Execução multi-nó | **Múltiplos terminais** (processos Python em `127.0.0.1`, portas distintas) | Simula a rede distribuída sem virtualização — conforme `main.tex` Seção 5.3 |
 | Configuração | **YAML** (`pyyaml`) ou variáveis de ambiente | Arquivos `config/*.yaml` |
 | CLI | `input()` / `print()` puros | **Sem TUI ou GUI** — foco no sistema distribuído |
@@ -68,7 +69,7 @@ peerspot/
 │   │
 │   ├── common/                     # código compartilhado entre peer e tracker
 │   │   ├── __init__.py
-│   │   ├── messages.py             # dataclasses/TypedDicts de TODAS as mensagens (Listing 7.2 do main.tex)
+│   │   ├── messages.py             # modelos pydantic (BaseModel) de TODAS as mensagens (Listing 7.2 do main.tex)
 │   │   ├── protocol.py             # helpers de envio/recepção TCP (framing por \n, JSON, header+payload)
 │   │   ├── hashing.py              # SHA-256 de arquivos e chunks
 │   │   ├── chunking.py             # split/join de arquivos em chunks
@@ -144,7 +145,7 @@ peerspot/
 
 ## 5. Mensagens do Protocolo
 
-**Todas as mensagens estão definidas no `main.tex` Listing 7.2 (Seção 7.2).** Implemente-as **literalmente** em `src/common/messages.py` como `TypedDict` ou `dataclass`. Lista completa:
+**Todas as mensagens estão definidas no `main.tex` Listing 7.2 (Seção 7.2).** Implemente-as **literalmente** em `src/common/messages.py` como modelos **pydantic** (`BaseModel`). Lista completa:
 
 ### Entrada e presença (peer → tracker)
 - `PEER_HELLO` — apresentação inicial
@@ -422,7 +423,7 @@ Os scripts devem: ativar o virtualenv se existir (`.venv/bin/activate`), exporta
 Implemente nesta ordem. **Não avance** para a próxima fase sem que a anterior tenha testes passando.
 
 ### Fase 1 — Fundação
-1. `src/common/messages.py` — todas as mensagens como TypedDict
+1. `src/common/messages.py` — todas as mensagens como modelos pydantic
 2. `src/common/hashing.py` — SHA-256 de arquivos e bytes
 3. `src/common/chunking.py` — split/join
 4. `src/common/protocol.py` — `send_json_line()`, `recv_json_line()`, `send_chunk()`, `recv_chunk()`
@@ -545,7 +546,7 @@ Se algo neste documento parece ambíguo ou conflitar com `main.tex`:
 - **Arquivos: abaixo de 500 linhas.** Divida por responsabilidade (a estrutura da §3 já força isso — mantenha).
 - **Uma coisa por função, uma responsabilidade por módulo (SRP).** O handler não faz I/O de socket; o socket não faz regra de negócio.
 - **Nomes específicos e únicos.** Evite `data`, `handler`, `manager`, `process`, `info`. Prefira nomes que retornem poucos hits no `grep` (`apply_sync_entry`, `expire_tombstones`, `recv_chunk`).
-- **Type hints explícitos em tudo** (já obrigatório na §4.1). Sem `Any`, sem `dict`/`list` crus quando há um `TypedDict`/`dataclass` (use os de `messages.py`). `from __future__ import annotations` no topo de cada módulo.
+- **Type hints explícitos em tudo** (já obrigatório na §4.1). Sem `Any`, sem `dict`/`list` crus quando há um modelo pydantic/`dataclass` (use os de `messages.py`). `from __future__ import annotations` no topo de cada módulo.
 - **Sem duplicação.** Lógica compartilhada entre peer e tracker mora em `src/common/`. Se copiar-colar, extraia.
 - **Early returns em vez de ifs aninhados.** Máximo de 2 níveis de indentação no corpo de uma função.
 - **Mensagens de exceção incluem o valor ofensor e o formato esperado.** Use as exceções de `src/common/errors.py`; ex.: `raise InvalidHash(f"hash esperado sha256 de 64 hex, recebido {valor!r}")`.

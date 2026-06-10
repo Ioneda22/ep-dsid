@@ -4,7 +4,14 @@ from __future__ import annotations
 
 import pytest
 
-from src.common.messages import REQUIRED_FIELDS, validate_message
+from pydantic import BaseModel
+
+from src.common.messages import (
+    MESSAGE_MODELS,
+    REQUIRED_FIELDS,
+    PeerHello,
+    validate_message,
+)
 
 
 def test_validate_peer_hello_completo() -> None:
@@ -64,6 +71,12 @@ def test_validate_msg_nao_dict() -> None:
         validate_message([1, 2, 3])  # type: ignore[arg-type]
 
 
+def test_validate_campo_com_tipo_errado() -> None:
+    msg = {"type": "PEER_HELLO", "nome_peer": "alice", "ip": "127.0.0.1", "porta": "x"}
+    with pytest.raises(ValueError, match="inválida"):
+        validate_message(msg)
+
+
 def test_required_fields_cobre_todos_os_tipos() -> None:
     """Sanity: todos os 19 tipos do Listing 7.2 estão em REQUIRED_FIELDS."""
     esperados = {
@@ -76,3 +89,21 @@ def test_required_fields_cobre_todos_os_tipos() -> None:
         "ERROR",
     }
     assert set(REQUIRED_FIELDS.keys()) == esperados
+    assert set(MESSAGE_MODELS.keys()) == esperados
+
+
+def test_modelos_sao_pydantic_com_type_default() -> None:
+    """Cada modelo é BaseModel e serializa o campo ``type`` correto."""
+    for tipo, modelo in MESSAGE_MODELS.items():
+        assert issubclass(modelo, BaseModel)
+        assert modelo.model_fields["type"].default == tipo
+
+
+def test_modelo_serializa_para_dict_do_protocolo() -> None:
+    hello = PeerHello(nome_peer="alice", ip="127.0.0.1", porta=7001)
+    assert hello.model_dump() == {
+        "type": "PEER_HELLO",
+        "nome_peer": "alice",
+        "ip": "127.0.0.1",
+        "porta": 7001,
+    }
