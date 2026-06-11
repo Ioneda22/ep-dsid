@@ -38,7 +38,12 @@ def _socketpair() -> tuple[socket.socket, socket.socket]:
 def test_roundtrip_json_pura_simples() -> None:
     a, b = _socketpair()
     try:
-        msg = {"type": "PEER_HELLO", "nome_peer": "alice", "ip": "127.0.0.1", "porta": 7001}
+        msg = {
+            "type": "PEER_HELLO",
+            "nome_peer": "alice",
+            "ip": "127.0.0.1",
+            "porta": 7001,
+        }
         send_json_line(a, msg)
         header, payload = MessageReader(b).recv_message()
         assert header == msg
@@ -184,7 +189,12 @@ def test_chunk_coalescimento_tcp() -> None:
 def test_send_chunk_payload_bytes_inconsistente() -> None:
     a, b = _socketpair()
     try:
-        header = {"type": "CHUNK_DATA", "hash": "x" * 64, "chunk_index": 0, "payload_bytes": 10}
+        header = {
+            "type": "CHUNK_DATA",
+            "hash": "x" * 64,
+            "chunk_index": 0,
+            "payload_bytes": 10,
+        }
         with pytest.raises(ValueError, match="payload_bytes"):
             send_chunk(a, header, b"abc")
     finally:

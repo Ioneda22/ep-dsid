@@ -11,6 +11,7 @@ import pytest
 
 from src.common.logging_config import setup_logging
 
+
 # fixture prepara limpa o ambiente de teste antes do yield seria a preparação antes
 # do teste rodar depois do yield é limpando o ambiente
 @pytest.fixture(autouse=True)
@@ -46,7 +47,8 @@ def test_setup_logging_idempotente(tmp_path: Path) -> None:
     setup_logging(log_path, level="INFO")
 
     handlers_peerspot = [
-        h for h in logging.getLogger().handlers
+        h
+        for h in logging.getLogger().handlers
         if getattr(h, "_peerspot_handler", False)
     ]
     assert len(handlers_peerspot) == 2  # 1 arquivo + 1 stderr

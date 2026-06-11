@@ -37,7 +37,9 @@ def indice(relogio: RelogioFake) -> Index:
 
 def _hello_e_upload(indice: Index, nome_peer: str = "alice", porta: int = 7001) -> None:
     indice.register_peer(nome_peer, "127.0.0.1", porta)
-    indice.register_file(nome_peer, HASH_A, nome="Imagine", tamanho=5_000_000, n_chunks=20)
+    indice.register_file(
+        nome_peer, HASH_A, nome="Imagine", tamanho=5_000_000, n_chunks=20
+    )
 
 
 # ---------------------------------------------------------------------------

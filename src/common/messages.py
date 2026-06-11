@@ -104,10 +104,18 @@ class SearchResultPeer(BaseModel):
 
 
 class SearchResultEntry(BaseModel):
-    """Entrada de resultado de busca (um hash + seus peers)."""
+    """Entrada de resultado de busca (um hash + seus peers).
+
+    ``n_chunks`` é uma extensão consciente do Listing 7.2 (autorizada):
+    o peer precisa do total de chunks para montar o plano de download e
+    o tracker já o conhece do ``REGISTER_FILE`` original — sem ele, o
+    peer teria de inferi-lo dos ``CHUNK_LIST`` das fontes, o que falha
+    quando nenhuma fonte tem o arquivo completo.
+    """
 
     hash: str
     nome: str
+    n_chunks: int
     peers: list[SearchResultPeer]
 
 
@@ -313,9 +321,7 @@ MESSAGE_MODELS: dict[str, type[BaseModel]] = {
 
 def _campos_obrigatorios(modelo: type[BaseModel]) -> tuple[str, ...]:
     return tuple(
-        nome
-        for nome, campo in modelo.model_fields.items()
-        if campo.is_required()
+        nome for nome, campo in modelo.model_fields.items() if campo.is_required()
     )
 
 

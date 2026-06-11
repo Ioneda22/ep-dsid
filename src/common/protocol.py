@@ -70,9 +70,7 @@ def send_json_line(sock: socket.socket, msg: dict[str, Any]) -> None:
     sock.sendall(payload)
 
 
-def send_chunk(
-    sock: socket.socket, header: dict[str, Any], payload: bytes
-) -> None:
+def send_chunk(sock: socket.socket, header: dict[str, Any], payload: bytes) -> None:
     """Envia um cabeçalho JSON (com ``\\n``) seguido do payload binário.
 
     O campo ``payload_bytes`` em ``header`` deve refletir ``len(payload)``;
@@ -128,16 +126,12 @@ def recv_exact(sock: socket.socket, n: int) -> bytes:
     while len(buf) < n:
         chunk = sock.recv(min(_RECV_CHUNK, n - len(buf)))
         if not chunk:
-            raise ConnectionClosedError(
-                f"Conexão fechada após {len(buf)}/{n} bytes"
-            )
+            raise ConnectionClosedError(f"Conexão fechada após {len(buf)}/{n} bytes")
         buf.extend(chunk)
     return bytes(buf)
 
 
-def _read_line(
-    sock: socket.socket, prebuf: bytearray
-) -> tuple[bytes, bytearray]:
+def _read_line(sock: socket.socket, prebuf: bytearray) -> tuple[bytes, bytearray]:
     """Lê do socket até ``\\n``, reusando ``prebuf`` se já contiver bytes.
 
     Args:
@@ -161,9 +155,7 @@ def _read_line(
             return line, leftover
         chunk = sock.recv(_RECV_CHUNK)
         if not chunk:
-            raise ConnectionClosedError(
-                "Conexão fechada antes do delimitador '\\n'"
-            )
+            raise ConnectionClosedError("Conexão fechada antes do delimitador '\\n'")
         buf.extend(chunk)
 
 
@@ -258,5 +250,3 @@ class MessageReader:
         payload = bytes(self._buf) + recv_exact(self.sock, falta)
         self._buf = bytearray()
         return header, payload
-
-

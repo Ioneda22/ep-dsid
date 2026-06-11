@@ -8,6 +8,15 @@ e o projeto segue [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 ## [Não lançado]
 
 ### Alterado
+- **`SEARCH_RESULT` ganhou `n_chunks` por entrada** (extensão consciente
+  do Listing 7.2, refletida no `main.tex`): o peer precisa do total de
+  chunks para montar o plano de download e o tracker já o conhece do
+  `REGISTER_FILE` original — sem o campo, o peer teria de inferir o
+  total a partir dos `CHUNK_LIST` das fontes, o que falharia se nenhuma
+  fonte tivesse o arquivo completo. Alterados `SearchResultEntry`
+  (`src/common/messages.py`), `Index.search_by_name`
+  (`src/tracker/index.py`) e o Listing 7.2 do `main.tex`.
+- Código formatado com `black` (§14.5 do `CLAUDE.md`).
 - **Mensagens do protocolo migradas de `TypedDict` para pydantic v2**: os
   19 tipos do Listing 7.2 em `src/common/messages.py` agora são `BaseModel`
   com `type: Literal[...]` com default. `MESSAGE_MODELS` mapeia
@@ -23,6 +32,70 @@ e o projeto segue [Versionamento Semântico](https://semver.org/lang/pt-BR/).
   `pydantic>=2` explicitado em `requirements.txt`.
 
 ### Adicionado
+- **Fase 3 — Peer básico** (§9 do `CLAUDE.md`): UM peer com download
+  SEQUENCIAL (paralelo só na Fase 5), sem fallback de tracker (Fase 5)
+  e sem sync entre trackers (Fase 4):
+  - `src/peer/storage.py` — classe `Storage` com layout
+    `<hash>/chunks/chunk_<i>.bin` (durante download) e `<hash>/arquivo`
+    (montado). Para não duplicar espaço, `assemble_file` valida o
+    SHA-256 (monta em `arquivo.tmp` + rename, para `load_chunk` nunca
+    ver montagem parcial) e **apaga os chunks individuais**; ao servir
+    outros peers, `load_chunk` extrai a fatia do arquivo montado
+    on-the-fly (`seek`/`read`). Métodos: `save_chunk`, `load_chunk`,
+    `has_chunk`, `get_chunk_count`, `list_local_files`, `import_file`
+    (upload: hash + cópia para o storage), `assemble_file`,
+    `remove_file`, `assembled_path`. `chunk_size` injetável.
+  - `src/peer/tracker_client.py` — `PeerTrackerClient` (httpx síncrono,
+    timeout configurável), usa só o primeiro tracker da lista (fallback
+    na Fase 5): `peer_hello`, `peer_leave`, `seed_report`,
+    `register_file`, `search_file` (retorna `SearchResult` tipado),
+    `peer_leave_file`. Falhas de rede logam e retornam `None`.
+  - `src/peer/tcp_server.py` — `PeerTCPServer` em thread daemon, uma
+    thread filha por conexão; conexões peer↔peer são **persistentes**
+    (um `MessageReader` por conexão, loop até o cliente fechar). Atende
+    `CHUNK_LIST_REQUEST` → `CHUNK_LIST` e `CHUNK_REQUEST` →
+    `CHUNK_DATA_HEADER` + payload (`send_chunk`); pedidos malformados ou
+    chunk ausente respondem `ERROR` (`MALFORMED_MESSAGE`/`NOT_FOUND`).
+    `porta=0` escolhe porta livre (testes); `started: threading.Event`.
+  - `src/peer/tcp_client.py` — `PeerTCPClient` com cache de conexões
+    persistentes por fonte (reuso entre múltiplos `CHUNK_REQUEST`):
+    `request_chunk_list`, `download_chunk`, `close_all`; timeout por
+    requisição (`chunk_request_timeout_seconds`), conexão descartada em
+    falha.
+  - `src/peer/chunk_manager.py` — `ChunkManager`: `start_download`,
+    `mark_received`, `missing_chunks`, `is_complete`, `progress`,
+    `reset`.
+  - `src/peer/downloader.py` — `Downloader` sequencial: `SEARCH_FILE`
+    (por nome; o `SEARCH_RESULT` traz `n_chunks`) → `CHUNK_LIST_REQUEST`
+    a cada fonte → chunks em ordem, qualquer fonte que tenha o chunk;
+    em falha tenta a próxima fonte e, se todas falharem, **retenta com
+    espera** (`max_tentativas`/`retry_delay_seconds`, `sleep` injetável
+    §10) → `assemble_file` valida SHA-256 → re-registro. **Retomada**:
+    chunks já gravados são mantidos em falha e o progresso é
+    reconciliado a partir do disco (`has_chunk`), sobrevivendo a
+    reinício do processo; hash divergente descarta tudo (§7.4 passo 6).
+  - `src/peer/cli.py` — `PeerCLI` com `input()`/`print()` (§7.2):
+    `help`, `upload`, `search`, `download`, `list`, `remove`, `quit`;
+    `peers`/`playlist`/`status` são stubs até as Fases 5/6. `download
+    <hash>` usa o nome legível cacheado da última busca (resolução em
+    dois passos do main.tex).
+  - `src/peer/seed_reporter.py` — stub: thread daemon que apenas dorme
+    em ciclos de 3 min (envio real do `SEED_REPORT` na Fase 5).
+  - `src/peer/main.py` — entrypoint
+    `python -m src.peer.main --config config/peer-alice.yaml`
+    (`PeerSettings` do YAML §7.6): sobe TCP server + seed reporter,
+    envia `PEER_HELLO`, roda a CLI; no `quit` envia `PEER_LEAVE` e
+    encerra threads/conexões.
+  - `config/peer-alice.yaml` (porta 7001) e `config/peer-bob.yaml`
+    (porta 7002), ambos com a lista dos 3 trackers (§7.6).
+  - Testes: `tests/unit/test_storage.py` (12),
+    `tests/unit/test_chunk_manager.py` (7) e
+    `tests/integration/test_download_sequential.py` — tracker uvicorn
+    real + componentes de alice e bob em portas dinâmicas (§10): upload
+    de 2 MiB (8 chunks) em alice, download sequencial em bob com SHA-256
+    conferido byte a byte, chunks apagados pós-montagem, bob vira
+    segunda fonte no índice e passa a servir chunks fatiados do arquivo
+    montado. Suíte completa: 121 testes em ~7 s.
 - **Fase 2 — Tracker básico** (§9 do `CLAUDE.md`): um tracker, sem
   sincronização entre trackers (Fase 4), sem failure detector (Fase 5) e
   sem `SEARCH_FORWARD`:

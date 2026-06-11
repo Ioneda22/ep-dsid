@@ -348,13 +348,18 @@ SEARCH_FORWARD = {
 
 # Resposta com peers disponiveis (tracker -> peer  ou  tracker -> tracker)
 # Lista vazia em 'resultados' significa "nada encontrado".
+# Cada resultado carrega 'n_chunks' (conhecido do REGISTER_FILE original)
+# para o peer montar o plano de download sem precisar inferir o total a
+# partir dos CHUNK_LIST das fontes, o que falharia se nenhuma fonte
+# tivesse o arquivo completo.
 SEARCH_RESULT = {
     "type":       "SEARCH_RESULT",
     "query_id":   "uuid",
     "resultados": [
         {
-            "hash": "sha256_hex",
-            "nome": "string",
+            "hash":     "sha256_hex",
+            "nome":     "string",
+            "n_chunks": "int",
             "peers": [
                 { "nome_peer": "string", "ip": "string", "porta": "int" }
             ]

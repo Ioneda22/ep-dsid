@@ -80,12 +80,24 @@ def test_validate_campo_com_tipo_errado() -> None:
 def test_required_fields_cobre_todos_os_tipos() -> None:
     """Sanity: todos os 19 tipos do Listing 7.2 estão em REQUIRED_FIELDS."""
     esperados = {
-        "PEER_HELLO", "PEER_LEAVE", "UPDATE_IP", "SEED_REPORT",
-        "REGISTER_FILE", "SEARCH_FILE", "SEARCH_FORWARD", "SEARCH_RESULT",
-        "CHUNK_LIST_REQUEST", "CHUNK_LIST", "CHUNK_REQUEST", "CHUNK_DATA",
+        "PEER_HELLO",
+        "PEER_LEAVE",
+        "UPDATE_IP",
+        "SEED_REPORT",
+        "REGISTER_FILE",
+        "SEARCH_FILE",
+        "SEARCH_FORWARD",
+        "SEARCH_RESULT",
+        "CHUNK_LIST_REQUEST",
+        "CHUNK_LIST",
+        "CHUNK_REQUEST",
+        "CHUNK_DATA",
         "PEER_LEAVE_FILE",
-        "SYNC_TABLE", "FULL_SYNC",
-        "TRACKER_REJOIN", "TRACKER_ANNOUNCE", "REASSIGN_TRACKER",
+        "SYNC_TABLE",
+        "FULL_SYNC",
+        "TRACKER_REJOIN",
+        "TRACKER_ANNOUNCE",
+        "REASSIGN_TRACKER",
         "ERROR",
     }
     assert set(REQUIRED_FIELDS.keys()) == esperados

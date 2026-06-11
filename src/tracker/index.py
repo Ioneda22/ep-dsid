@@ -166,7 +166,9 @@ class Index:
         with self._lock:
             endereco = self._endereco_ou_erro_locked(nome_peer)
             self._garantir_metadata_locked(hash_arquivo, nome, tamanho, n_chunks)
-            self._registrar_fonte_locked(hash_arquivo, nome_peer, endereco, refresh=True)
+            self._registrar_fonte_locked(
+                hash_arquivo, nome_peer, endereco, refresh=True
+            )
 
     def remove_peer_from_hash(self, hash_arquivo: str, nome_peer: str) -> None:
         """Aplica ``PEER_LEAVE_FILE``: o par (hash, peer) vira tombstone.
@@ -218,7 +220,12 @@ class Index:
                     continue
                 meta = self.hash_to_metadata[hash_arquivo]
                 resultados.append(
-                    SearchResultEntry(hash=hash_arquivo, nome=meta.nome, peers=peers)
+                    SearchResultEntry(
+                        hash=hash_arquivo,
+                        nome=meta.nome,
+                        n_chunks=meta.n_chunks,
+                        peers=peers,
+                    )
                 )
             return resultados
 

@@ -9,8 +9,14 @@ from src.common import errors
 
 def test_codigos_de_erro_definidos() -> None:
     esperados = {
-        "NOT_FOUND", "INVALID_HASH", "INVALID_CHUNK", "UNAUTHORIZED",
-        "PEER_UNKNOWN", "TRACKER_UNKNOWN", "MALFORMED_MESSAGE", "INTERNAL_ERROR",
+        "NOT_FOUND",
+        "INVALID_HASH",
+        "INVALID_CHUNK",
+        "UNAUTHORIZED",
+        "PEER_UNKNOWN",
+        "TRACKER_UNKNOWN",
+        "MALFORMED_MESSAGE",
+        "INTERNAL_ERROR",
     }
     assert errors.ERROR_CODES == esperados
 

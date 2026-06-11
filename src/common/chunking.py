@@ -37,9 +37,7 @@ def chunk_count(file_size: int, chunk_size: int = DEFAULT_CHUNK_SIZE) -> int:
     return math.ceil(file_size / chunk_size)
 
 
-def split_file(
-    path: Path, chunk_size: int = DEFAULT_CHUNK_SIZE
-) -> Iterator[bytes]:
+def split_file(path: Path, chunk_size: int = DEFAULT_CHUNK_SIZE) -> Iterator[bytes]:
     """Itera sobre os chunks de um arquivo, em ordem do início ao fim.
 
     Cada chunk tem exatamente ``chunk_size`` bytes, exceto possivelmente o
