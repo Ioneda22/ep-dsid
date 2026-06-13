@@ -225,7 +225,7 @@ def test_apply_seed_hashes_preserva_timestamp_de_fonte_existente(
 
 
 # ---------------------------------------------------------------------------
-# Snapshot e stub da Fase 4
+# Snapshot e retornos para propagação (Fase 4)
 # ---------------------------------------------------------------------------
 
 
@@ -236,9 +236,44 @@ def test_snapshot_e_copia_independente(indice: Index) -> None:
     assert indice.get_peers_for_hash(HASH_A) != []
 
 
-def test_apply_sync_entry_stub_fase_4(indice: Index) -> None:
-    entry = SyncTableEntry(
-        hash=HASH_A, nome_peer="alice", ip="127.0.0.1", porta=7001, ativo=True
+def test_register_file_devolve_entrada_e_metadados(indice: Index) -> None:
+    """O retorno alimenta o SYNC_TABLE com o MESMO timestamp local (LWW)."""
+    indice.register_peer("alice", "127.0.0.1", 7001)
+    entry, meta = indice.register_file(
+        "alice", HASH_A, nome="Imagine", tamanho=5_000_000, n_chunks=20
     )
-    with pytest.raises(NotImplementedError):
-        indice.apply_sync_entry(entry, origem_tracker="tracker-2")
+    assert (entry.nome_peer, entry.ip, entry.porta) == ("alice", "127.0.0.1", 7001)
+    assert entry.timestamp == 1000.0
+    assert (meta.nome, meta.tamanho, meta.n_chunks) == ("Imagine", 5_000_000, 20)
+
+
+def test_remove_peer_from_hash_devolve_tombstone(
+    indice: Index, relogio: RelogioFake
+) -> None:
+    _hello_e_upload(indice)
+    relogio.avancar(30)
+    tombstone = indice.remove_peer_from_hash(HASH_A, "alice")
+    assert tombstone.nome_peer == "alice"
+    assert tombstone.timestamp == 1030.0
+
+
+def test_apply_sync_entry_registra_fonte_remota(indice: Index) -> None:
+    entry = SyncTableEntry(
+        hash=HASH_A,
+        nome_peer="bob",
+        ip="127.0.0.1",
+        porta=7002,
+        ativo=True,
+        nome="Imagine",
+        tamanho=5_000_000,
+        n_chunks=20,
+    )
+    assert indice.apply_sync_entry(entry, origem_tracker="tracker-2", timestamp=900.0)
+    fontes = indice.get_peers_for_hash(HASH_A)
+    assert [(p.nome_peer, p.ip, p.porta) for p in fontes] == [
+        ("bob", "127.0.0.1", 7002)
+    ]
+    # Metadados da entry permitem busca por nome local (extensão Listing 7.2).
+    assert indice.search_by_name("Imagine")[0].hash == HASH_A
+    # Presença NÃO é tocada: bob reporta SEED_REPORT ao tracker dele.
+    assert "bob" not in indice.get_snapshot().nome_peer_to_endereco

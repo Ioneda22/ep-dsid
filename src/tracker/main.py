@@ -1,8 +1,13 @@
 """Entrypoint do tracker: ``python -m src.tracker.main --config config/tracker-1.yaml``.
 
-Fase 2: sobe apenas a API REST (FastAPI/uvicorn). O servidor de
-sincronização TCP (Fase 4) e o failure detector (Fase 5) ainda não
-existem — ``sync_port`` é lido e reservado, mas não usado.
+Sobe, no MESMO processo Python (§8 da tarefa da Fase 4):
+
+* a API REST (FastAPI/uvicorn) na ``api_port`` — atendimento aos peers;
+* o servidor TCP de sincronização (``SyncServer``) na ``sync_port``,
+  em thread própria — flooding ``SYNC_TABLE`` e ``SEARCH_FORWARD``;
+* o ``TombstoneReaper`` (expiração de tombstones a cada 60s).
+
+O failure detector e a reintegração (``TRACKER_REJOIN``) chegam na Fase 5.
 """
 
 from __future__ import annotations
@@ -20,6 +25,10 @@ from src.common.logging_config import setup_logging
 from src.tracker.api import create_app
 from src.tracker.index import Index
 from src.tracker.persistence import init_db
+from src.tracker.routing import SearchRouter
+from src.tracker.sync_client import KnownTracker, SyncClient
+from src.tracker.sync_server import SyncServer
+from src.tracker.tombstone import TombstoneReaper
 
 logger = logging.getLogger(__name__)
 
@@ -93,8 +102,29 @@ def _trackers_conhecidos(settings: TrackerSettings) -> list[dict[str, Any]]:
     return [proprio, *settings.known_trackers]
 
 
+def _known_trackers_sync(settings: TrackerSettings) -> list[KnownTracker]:
+    """Converte os ``known_trackers`` do YAML em destinos de sincronização.
+
+    Raises:
+        ConfigError: Se alguma entrada não tiver tracker_id/ip/sync_port.
+    """
+    destinos: list[KnownTracker] = []
+    for entrada in settings.known_trackers:
+        require_keys(
+            entrada, ("tracker_id", "ip", "sync_port"), origem="known_trackers"
+        )
+        destinos.append(
+            KnownTracker(
+                tracker_id=str(entrada["tracker_id"]),
+                ip=str(entrada["ip"]),
+                sync_port=int(entrada["sync_port"]),
+            )
+        )
+    return destinos
+
+
 def main(argv: list[str] | None = None) -> None:
-    """Carrega config, prepara logging/índice/banco e serve a API REST."""
+    """Carrega config, sobe sync server + reaper e serve a API REST."""
     parser = argparse.ArgumentParser(description="Tracker do PeerSpot")
     parser.add_argument(
         "--config", required=True, type=Path, help="caminho do YAML (config/*.yaml)"
@@ -104,23 +134,57 @@ def main(argv: list[str] | None = None) -> None:
     settings = load_tracker_settings(args.config)
     setup_logging(settings.log_path, settings.log_level)
     logger.info(
-        "tracker_id=%s subindo API REST em %s:%d (bootstrap=%s)",
+        "tracker_id=%s subindo API REST em %s:%d e sync em %s:%d (bootstrap=%s)",
         settings.tracker_id,
         settings.ip,
         settings.api_port,
+        settings.ip,
+        settings.sync_port,
         settings.is_bootstrap,
     )
 
-    index = Index()
+    index = Index(tracker_id=settings.tracker_id)
     db = init_db(settings.db_path)
+    known_trackers = _known_trackers_sync(settings)
+    sync_client = SyncClient(
+        tracker_id=settings.tracker_id,
+        known_trackers=known_trackers,
+        timeout_seconds=settings.sync_outbound_timeout_seconds,
+    )
+    search_router = SearchRouter(
+        tracker_id=settings.tracker_id,
+        known_trackers=known_trackers,
+        index=index,
+        timeout_seconds=settings.search_forward_timeout_seconds,
+    )
+    sync_server = SyncServer(
+        tracker_id=settings.tracker_id,
+        ip=settings.ip,
+        sync_port=settings.sync_port,
+        index=index,
+    )
+    sync_server.start()
+    reaper = TombstoneReaper(
+        tracker_id=settings.tracker_id,
+        index=index,
+        retention_seconds=settings.tombstone_retention_seconds,
+    )
+    reaper.start()
+
     app = create_app(
         index=index,
         db=db,
         tracker_id=settings.tracker_id,
         trackers_conhecidos=_trackers_conhecidos(settings),
+        sync_client=sync_client,
+        search_router=search_router,
     )
-    # log_config=None: mantém o logging configurado pelo setup_logging.
-    uvicorn.run(app, host=settings.ip, port=settings.api_port, log_config=None)
+    try:
+        # log_config=None: mantém o logging configurado pelo setup_logging.
+        uvicorn.run(app, host=settings.ip, port=settings.api_port, log_config=None)
+    finally:
+        reaper.stop()
+        sync_server.stop()
 
 
 if __name__ == "__main__":

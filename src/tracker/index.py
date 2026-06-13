@@ -33,13 +33,20 @@ class FileMetadata:
 
 @dataclass
 class PeerEntry:
-    """Um peer como fonte de um hash, com timestamp para LWW (§6.2)."""
+    """Um peer como fonte de um hash, com timestamp para LWW (§6.2).
+
+    ``origem`` registra o tracker que produziu a escrita: é o desempate
+    do LWW quando timestamps colidem (main.tex §12.2). Comparar contra o
+    tracker LOCAL não bastaria — o vencedor dependeria da ordem de
+    chegada e as réplicas divergiriam.
+    """
 
     nome_peer: str
     ip: str
     porta: int
     ativo: bool
     timestamp: float
+    origem: str = ""
 
 
 @dataclass
@@ -53,12 +60,16 @@ class PeerAddress:
 
 @dataclass
 class TombstoneEntry:
-    """Remoção registrada de (hash, peer); expira após 10 min (Fase 4)."""
+    """Remoção registrada de (hash, peer); expira após 10 min.
+
+    ``origem`` tem o mesmo papel de desempate LWW do :class:`PeerEntry`.
+    """
 
     nome_peer: str
     ip: str
     porta: int
     timestamp: float
+    origem: str = ""
 
 
 @dataclass
@@ -75,15 +86,20 @@ class IndexSnapshot:
 class Index:
     """Estado em memória do tracker, protegido por um único ``threading.Lock``.
 
-    O relógio é injetado por construtor para testes determinísticos (§10):
+    O relógio é injetado por construtor para testes determinísticos (§10);
+    ``tracker_id`` identifica este tracker como ``origem`` das escritas
+    locais, usado no desempate do LWW (main.tex §12.2):
 
-        >>> indice = Index(clock=lambda: 1000.0)
+        >>> indice = Index(clock=lambda: 1000.0, tracker_id="tracker-1")
         >>> indice.register_peer("alice", "127.0.0.1", 7001)
     """
 
-    def __init__(self, clock: Callable[[], float] = time.time) -> None:
+    def __init__(
+        self, clock: Callable[[], float] = time.time, tracker_id: str = ""
+    ) -> None:
         self._lock = threading.Lock()
         self._clock = clock
+        self._tracker_id = tracker_id
         self.nome_to_hashes: dict[str, set[str]] = {}
         self.hash_to_metadata: dict[str, FileMetadata] = {}
         self.hash_to_peers: dict[str, dict[str, PeerEntry]] = {}
@@ -153,11 +169,17 @@ class Index:
         nome: str | None = None,
         tamanho: int | None = None,
         n_chunks: int | None = None,
-    ) -> None:
+    ) -> tuple[PeerEntry, FileMetadata]:
         """Aplica ``REGISTER_FILE``: upload original ou re-registro pós-download.
 
         No re-registro, ``nome``/``tamanho``/``n_chunks`` são opcionais — o
         tracker já os conhece do upload original (main.tex §7.2).
+
+        Returns:
+            Cópias da entrada gravada e dos metadados do arquivo, para que o
+            chamador monte o ``SYNC_TABLE`` de propagação com o MESMO
+            timestamp gravado localmente (LWW exige timestamps idênticos
+            entre as réplicas).
 
         Raises:
             PeerUnknownError: Se o peer não enviou ``PEER_HELLO`` antes.
@@ -169,15 +191,26 @@ class Index:
             self._registrar_fonte_locked(
                 hash_arquivo, nome_peer, endereco, refresh=True
             )
+            return (
+                copy.copy(self.hash_to_peers[hash_arquivo][nome_peer]),
+                copy.copy(self.hash_to_metadata[hash_arquivo]),
+            )
 
-    def remove_peer_from_hash(self, hash_arquivo: str, nome_peer: str) -> None:
+    def remove_peer_from_hash(
+        self, hash_arquivo: str, nome_peer: str
+    ) -> TombstoneEntry:
         """Aplica ``PEER_LEAVE_FILE``: o par (hash, peer) vira tombstone.
+
+        Returns:
+            Cópia do tombstone gravado, para propagação via ``SYNC_TABLE``
+            com o mesmo timestamp local (LWW).
 
         Raises:
             NotFoundError: Se o peer não consta como fonte do hash.
         """
         with self._lock:
             self._tombstone_locked(hash_arquivo, nome_peer)
+            return copy.copy(self.tombstones[hash_arquivo][nome_peer])
 
     def apply_seed_hashes(self, nome_peer: str, hashes: set[str]) -> None:
         """Anti-entropy do ``SEED_REPORT``: hash omitido equivale a remoção.
@@ -255,14 +288,64 @@ class Index:
     # Sincronização entre trackers (Fase 4)
     # ------------------------------------------------------------------
 
-    def apply_sync_entry(self, entry: SyncTableEntry, origem_tracker: str) -> None:
-        """Aplica uma entrada de ``SYNC_TABLE`` com resolução LWW.
+    def apply_sync_entry(
+        self, entry: SyncTableEntry, origem_tracker: str, timestamp: float
+    ) -> bool:
+        """Aplica uma entrada de ``SYNC_TABLE`` com resolução LWW (§6.2).
 
-        Stub: a sincronização entre trackers chega na Fase 4 (§9).
+        ``timestamp`` vem do nível da mensagem ``SYNC_TABLE`` (Listing 7.2
+        o define por mensagem, não por entry) e por isso é parâmetro.
+
+        Regras (main.tex §12.2):
+        * timestamp recebido maior que o local → recebido vence;
+        * menor → descartado como desatualizado;
+        * empate → vence o maior ``tracker_id`` (lexicográfico), comparando
+          a ``origem`` da escrita local com ``origem_tracker`` — desempate
+          determinístico em todas as réplicas, independente da ordem de
+          chegada;
+        * ``ativo=False`` vira tombstone; ``ativo=True`` sobre tombstone
+          mais antigo remove o tombstone e registra a fonte.
+
+        A tabela ``nome_peer_to_endereco`` NÃO é tocada: presença e
+        failure detection (``last_seed_ts``) são responsabilidade do
+        tracker ao qual o peer reporta SEED_REPORT; a própria entry
+        carrega ip/porta, suficiente para responder buscas.
+
+        Returns:
+            ``True`` se a entrada foi aplicada, ``False`` se descartada
+            pelo LWW.
         """
-        raise NotImplementedError(
-            "apply_sync_entry será implementado na Fase 4 (sincronização entre trackers)"
-        )
+        with self._lock:
+            versao_local = self._versao_local_locked(entry.hash, entry.nome_peer)
+            if versao_local is not None and (timestamp, origem_tracker) <= versao_local:
+                return False  # LWW: desatualizada (empate vence maior tracker_id)
+            if entry.ativo:
+                self._aplicar_registro_remoto_locked(entry, origem_tracker, timestamp)
+            else:
+                self._aplicar_tombstone_remoto_locked(entry, origem_tracker, timestamp)
+            return True
+
+    def expire_tombstones(self, retention_seconds: float) -> int:
+        """Descarta tombstones mais velhos que ``retention_seconds`` (§6.2).
+
+        Chamado periodicamente pela thread de ``src.tracker.tombstone``.
+
+        Returns:
+            Quantidade de tombstones removidos.
+        """
+        with self._lock:
+            limite = self._clock() - retention_seconds
+            removidos = 0
+            for hash_arquivo in list(self.tombstones):
+                por_peer = self.tombstones[hash_arquivo]
+                for nome_peer in [
+                    p for p, t in por_peer.items() if t.timestamp < limite
+                ]:
+                    del por_peer[nome_peer]
+                    removidos += 1
+                if not por_peer:
+                    del self.tombstones[hash_arquivo]
+            return removidos
 
     # ------------------------------------------------------------------
     # Helpers privados — exigem o lock já adquirido
@@ -318,8 +401,9 @@ class Index:
             porta=endereco.porta,
             ativo=True,
             timestamp=self._clock(),
+            origem=self._tracker_id,
         )
-        self.tombstones.get(hash_arquivo, {}).pop(nome_peer, None)
+        self._descartar_tombstone_locked(hash_arquivo, nome_peer)
 
     def _tombstone_locked(self, hash_arquivo: str, nome_peer: str) -> None:
         entry = self.hash_to_peers.get(hash_arquivo, {}).pop(nome_peer, None)
@@ -332,6 +416,7 @@ class Index:
             ip=entry.ip,
             porta=entry.porta,
             timestamp=self._clock(),
+            origem=self._tracker_id,
         )
 
     def _atualizar_fontes_locked(self, nome_peer: str, ip: str, porta: int) -> None:
@@ -343,6 +428,65 @@ class Index:
             entry.ip = ip
             entry.porta = porta
             entry.timestamp = agora
+            entry.origem = self._tracker_id
+
+    def _descartar_tombstone_locked(self, hash_arquivo: str, nome_peer: str) -> None:
+        """Remove um tombstone sem deixar dict vazio órfão na tabela."""
+        por_peer = self.tombstones.get(hash_arquivo)
+        if por_peer is None:
+            return
+        por_peer.pop(nome_peer, None)
+        if not por_peer:
+            del self.tombstones[hash_arquivo]
+
+    def _versao_local_locked(
+        self, hash_arquivo: str, nome_peer: str
+    ) -> tuple[float, str] | None:
+        """Versão LWW local de (hash, peer): ``(timestamp, origem)`` ou ``None``.
+
+        A versão vigente está em ``hash_to_peers`` (fonte ativa) ou em
+        ``tombstones`` (remoção) — nunca em ambos.
+        """
+        fonte = self.hash_to_peers.get(hash_arquivo, {}).get(nome_peer)
+        if fonte is not None:
+            return (fonte.timestamp, fonte.origem)
+        tombstone = self.tombstones.get(hash_arquivo, {}).get(nome_peer)
+        if tombstone is not None:
+            return (tombstone.timestamp, tombstone.origem)
+        return None
+
+    def _aplicar_registro_remoto_locked(
+        self, entry: SyncTableEntry, origem_tracker: str, timestamp: float
+    ) -> None:
+        if entry.hash not in self.hash_to_metadata and entry.nome is not None:
+            # Metadados viajam no SYNC_TABLE (extensão do Listing 7.2) para
+            # que este tracker responda buscas por nome sem SEARCH_FORWARD.
+            self._garantir_metadata_locked(
+                entry.hash, entry.nome, entry.tamanho, entry.n_chunks
+            )
+        self._descartar_tombstone_locked(entry.hash, entry.nome_peer)
+        self.hash_to_peers.setdefault(entry.hash, {})[entry.nome_peer] = PeerEntry(
+            nome_peer=entry.nome_peer,
+            ip=entry.ip,
+            porta=entry.porta,
+            ativo=True,
+            timestamp=timestamp,
+            origem=origem_tracker,
+        )
+
+    def _aplicar_tombstone_remoto_locked(
+        self, entry: SyncTableEntry, origem_tracker: str, timestamp: float
+    ) -> None:
+        # Tombstone gravado mesmo sem fonte local prévia: protege contra um
+        # registro atrasado (timestamp menor) que chegue depois da remoção.
+        self.hash_to_peers.get(entry.hash, {}).pop(entry.nome_peer, None)
+        self.tombstones.setdefault(entry.hash, {})[entry.nome_peer] = TombstoneEntry(
+            nome_peer=entry.nome_peer,
+            ip=entry.ip,
+            porta=entry.porta,
+            timestamp=timestamp,
+            origem=origem_tracker,
+        )
 
     def _peers_ativos_locked(self, hash_arquivo: str) -> list[SearchResultPeer]:
         return [

@@ -35,6 +35,8 @@ from src.common.messages import (
 from src.tracker import handlers
 from src.tracker.index import Index
 from src.tracker.persistence import TrackerDB
+from src.tracker.routing import SearchRouter
+from src.tracker.sync_client import SyncClient
 
 logger = logging.getLogger(__name__)
 
@@ -67,6 +69,8 @@ def create_app(
     db: TrackerDB,
     tracker_id: str,
     trackers_conhecidos: list[dict[str, Any]],
+    sync_client: SyncClient | None = None,
+    search_router: SearchRouter | None = None,
 ) -> FastAPI:
     """Monta o app FastAPI do tracker com dependências injetadas (§14.4).
 
@@ -77,6 +81,10 @@ def create_app(
         trackers_conhecidos: Lista de trackers (incluindo este) exposta em
             ``GET /trackers`` — suporta o ``trackers_conhecidos`` do
             ``FULL_SYNC`` na Fase 5.
+        sync_client: Flooding ``SYNC_TABLE`` aos demais trackers (Fase 4);
+            ``None`` desliga a propagação (tracker isolado/testes).
+        search_router: Roteamento ``SEARCH_FORWARD`` quando a busca local
+            não tem hit (Fase 4); ``None`` limita a busca ao índice local.
 
     Returns:
         App pronto para ser servido pelo uvicorn.
@@ -134,15 +142,15 @@ def create_app(
 
     @app.post("/files/register")
     def files_register(body: RegisterFile) -> dict[str, str]:
-        return handlers.handle_register_file(body, index)
+        return handlers.handle_register_file(body, index, sync_client)
 
     @app.post("/files/leave")
     def files_leave(body: PeerLeaveFile) -> dict[str, str]:
-        return handlers.handle_peer_leave_file(body, index)
+        return handlers.handle_peer_leave_file(body, index, sync_client)
 
     @app.post("/search")
     def search(body: SearchFile) -> SearchResult:
-        return handlers.handle_search_file(body, index)
+        return handlers.handle_search_file(body, index, search_router)
 
     @app.get("/trackers")
     def trackers() -> dict[str, list[dict[str, Any]]]:

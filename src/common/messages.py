@@ -183,13 +183,25 @@ class PeerLeaveFile(BaseModel):
 
 
 class SyncTableEntry(BaseModel):
-    """Entrada individual dentro de uma SYNC_TABLE."""
+    """Entrada individual dentro de uma SYNC_TABLE.
+
+    ``nome``/``tamanho``/``n_chunks`` são uma extensão consciente do
+    Listing 7.2 (autorizada, refletida no main.tex): sem eles, um tracker
+    que conhece o hash apenas via SYNC_TABLE não consegue responder buscas
+    por nome nem aceitar o re-registro pós-download de um peer local —
+    o FULL_SYNC já carrega esses metadados, a omissão no SYNC_TABLE era
+    inconsistente. Opcionais: tombstones (``ativo=False``) não precisam
+    deles.
+    """
 
     hash: str
     nome_peer: str
     ip: str
     porta: int
     ativo: bool
+    nome: str | None = None
+    tamanho: int | None = None
+    n_chunks: int | None = None
 
 
 class SyncTable(BaseModel):

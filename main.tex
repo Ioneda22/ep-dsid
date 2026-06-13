@@ -423,6 +423,11 @@ PEER_LEAVE_FILE = {
 # Cada entry carrega o IP:porta do peer (necessario para o tracker
 # destinatario responder a buscas) e a flag 'ativo' que distingue
 # adicao de remocao (tombstone, ver Secao 13.3).
+# Entries de registro (ativo: True) carregam tambem os metadados do
+# arquivo (nome, tamanho, n_chunks), pelos mesmos motivos do FULL_SYNC:
+# sem eles, um tracker que conhece o hash apenas via SYNC_TABLE nao
+# consegue responder buscas por nome nem aceitar o re-registro
+# pos-download de um peer local. Tombstones (ativo: False) os omitem.
 SYNC_TABLE = {
     "type":      "SYNC_TABLE",
     "origem":    "tracker_id",
@@ -433,7 +438,10 @@ SYNC_TABLE = {
             "nome_peer": "string",
             "ip":        "string",
             "porta":     "int",
-            "ativo":     "bool"      # True = registro, False = tombstone
+            "ativo":     "bool",     # True = registro, False = tombstone
+            "nome":      "string  (opcional; presente quando ativo=True)",
+            "tamanho":   "int_bytes (opcional; presente quando ativo=True)",
+            "n_chunks":  "int    (opcional; presente quando ativo=True)"
         }
     ]
 }

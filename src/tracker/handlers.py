@@ -21,10 +21,13 @@ from src.common.messages import (
     SearchFile,
     SearchResult,
     SeedReport,
+    SyncTableEntry,
     UpdateIp,
 )
 from src.tracker.index import Index
 from src.tracker.persistence import TrackerDB
+from src.tracker.routing import SearchRouter
+from src.tracker.sync_client import SyncClient
 
 logger = logging.getLogger(__name__)
 
@@ -80,9 +83,17 @@ def handle_seed_report(msg: SeedReport, index: Index) -> AckOk:
     return _ack()
 
 
-def handle_register_file(msg: RegisterFile, index: Index) -> AckOk:
-    """Registra upload original ou re-registro pós-download."""
-    index.register_file(
+def handle_register_file(
+    msg: RegisterFile, index: Index, sync_client: SyncClient | None = None
+) -> AckOk:
+    """Registra upload original ou re-registro pós-download.
+
+    Com ``sync_client``, propaga a atualização via flooding ``SYNC_TABLE``
+    (main.tex, fluxo de upload) SEM bloquear a resposta REST — cada destino
+    recebe em thread daemon própria. O timestamp propagado é o MESMO
+    gravado no índice local, para o LWW convergir entre réplicas.
+    """
+    entry, meta = index.register_file(
         nome_peer=msg.nome_peer,
         hash_arquivo=msg.hash,
         nome=msg.nome,
@@ -92,21 +103,61 @@ def handle_register_file(msg: RegisterFile, index: Index) -> AckOk:
     logger.info(
         "REGISTER_FILE: nome_peer=%s hash=%s nome=%s", msg.nome_peer, msg.hash, msg.nome
     )
+    if sync_client is not None:
+        sync_client.propagar_sync(
+            [
+                SyncTableEntry(
+                    hash=msg.hash,
+                    nome_peer=msg.nome_peer,
+                    ip=entry.ip,
+                    porta=entry.porta,
+                    ativo=True,
+                    nome=meta.nome,
+                    tamanho=meta.tamanho,
+                    n_chunks=meta.n_chunks,
+                )
+            ],
+            timestamp=entry.timestamp,
+        )
     return _ack()
 
 
-def handle_peer_leave_file(msg: PeerLeaveFile, index: Index) -> AckOk:
-    """Remove o peer como fonte de um hash (vira tombstone)."""
-    index.remove_peer_from_hash(msg.hash, msg.nome_peer)
+def handle_peer_leave_file(
+    msg: PeerLeaveFile, index: Index, sync_client: SyncClient | None = None
+) -> AckOk:
+    """Remove o peer como fonte de um hash (vira tombstone).
+
+    Com ``sync_client``, propaga o tombstone via ``SYNC_TABLE`` com
+    ``ativo=False`` e o timestamp gravado localmente (main.tex §12.3).
+    """
+    tombstone = index.remove_peer_from_hash(msg.hash, msg.nome_peer)
     logger.info("PEER_LEAVE_FILE: nome_peer=%s hash=%s", msg.nome_peer, msg.hash)
+    if sync_client is not None:
+        sync_client.propagar_sync(
+            [
+                SyncTableEntry(
+                    hash=msg.hash,
+                    nome_peer=msg.nome_peer,
+                    ip=tombstone.ip,
+                    porta=tombstone.porta,
+                    ativo=False,
+                )
+            ],
+            timestamp=tombstone.timestamp,
+        )
     return _ack()
 
 
-def handle_search_file(msg: SearchFile, index: Index) -> SearchResult:
-    """Busca local por nome exato. SEM SEARCH_FORWARD nesta fase (Fase 4).
+def handle_search_file(
+    msg: SearchFile, index: Index, search_router: SearchRouter | None = None
+) -> SearchResult:
+    """Busca por nome exato; com ``search_router``, roteia via SEARCH_FORWARD.
 
+    Sem router (testes/uso isolado), a busca é apenas local.
     ``resultados=[]`` significa "nada encontrado" (main.tex §7.2).
     """
+    if search_router is not None:
+        return search_router.handle_search_file_with_forwarding(msg)
     resultados = index.search_by_name(msg.query)
     logger.info(
         "SEARCH_FILE: query_id=%s query=%r hits=%d",

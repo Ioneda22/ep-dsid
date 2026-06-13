@@ -8,6 +8,26 @@ e o projeto segue [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 ## [Não lançado]
 
 ### Alterado
+- **`SYNC_TABLE` ganhou `nome`/`tamanho`/`n_chunks` opcionais por entry**
+  (extensão consciente do Listing 7.2, refletida no `main.tex`, decidida
+  com o usuário): sem os metadados, um tracker que conhece o hash apenas
+  via flooding não consegue responder buscas por nome localmente (quebra
+  o critério §12.3 do `CLAUDE.md`) nem aceitar o re-registro
+  pós-download de um peer local, que envia só o hash (quebra o §12.5).
+  O `FULL_SYNC` já carregava esses campos — a omissão no `SYNC_TABLE`
+  era inconsistente. Tombstones (`ativo: False`) os omitem.
+- **`Index.register_file` e `Index.remove_peer_from_hash` passaram a
+  devolver cópias da entrada/tombstone gravados**: o handler monta o
+  `SYNC_TABLE` de propagação com o MESMO timestamp persistido no índice
+  local — se cada réplica recebesse um timestamp diferente do gravado no
+  originador, o LWW não convergiria.
+- **`PeerEntry`/`TombstoneEntry` ganharam o campo interno `origem`**
+  (tracker que produziu a escrita) e `Index` recebe `tracker_id` no
+  construtor para marcar escritas locais. Motivo: o desempate do LWW
+  ("empate → maior `tracker_id`", main.tex §12.2) precisa comparar os
+  tracker_ids dos DOIS escritores; comparar só com o id do tracker local
+  tornaria o vencedor dependente da ordem de chegada e as réplicas
+  divergiriam. É estrutura interna do índice, não muda o protocolo.
 - **`SEARCH_RESULT` ganhou `n_chunks` por entrada** (extensão consciente
   do Listing 7.2, refletida no `main.tex`): o peer precisa do total de
   chunks para montar o plano de download e o tracker já o conhece do
@@ -32,6 +52,95 @@ e o projeto segue [Versionamento Semântico](https://semver.org/lang/pt-BR/).
   `pydantic>=2` explicitado em `requirements.txt`.
 
 ### Adicionado
+- **Fase 4 — Sincronização entre trackers** (§9 do `CLAUDE.md`): flooding
+  `SYNC_TABLE` sobre TCP unicast com `socket` + `threading` (NUNCA
+  asyncio, §11.2), LWW, tombstones com expiração e `SEARCH_FORWARD`.
+  `TRACKER_REJOIN`/`FULL_SYNC`/`TRACKER_ANNOUNCE` ficam para a Fase 5
+  (o sync server os reconhece e loga, sem processar):
+  - `src/tracker/index.py` — `apply_sync_entry(entry, origem_tracker,
+    timestamp)` com LWW (§6.2): timestamp maior vence; menor é
+    descartado; empate vence o maior `tracker_id` lexicográfico,
+    comparando a `origem` da versão local com a do remetente — resolução
+    determinística em qualquer ordem de chegada. O `timestamp` é
+    parâmetro (não campo da entry) porque o Listing 7.2 o define no
+    nível da mensagem `SYNC_TABLE`. `ativo=False` vira tombstone — e é
+    gravado MESMO sem fonte local prévia, para barrar um registro
+    atrasado (timestamp menor) que chegue depois da remoção (raison
+    d'être do tombstone, main.tex §12.3). `ativo=True` sobre tombstone
+    mais antigo remove o tombstone e registra a fonte. A tabela
+    `nome_peer_to_endereco` NÃO é tocada pelo sync: presença/failure
+    detection é responsabilidade do tracker ao qual o peer reporta
+    SEED_REPORT; a entry carrega ip/porta, suficiente para buscas.
+    `expire_tombstones(retention)` remove tombstones com idade acima da
+    retenção (sem deixar dicts vazios órfãos).
+  - `src/tracker/sync_server.py` — `SyncServer`: servidor TCP na
+    `sync_port` dedicada (espelha o Listing 8.1), SEPARADO do FastAPI
+    mas no mesmo processo; `accept()` em loop, uma thread por conexão,
+    `MessageReader` por conexão (suporta o one-shot do flooding e o
+    request/response do SEARCH_FORWARD). `SYNC_TABLE` com
+    `origem == tracker_id` próprio é ignorada como eco (papel do campo
+    `origem`, main.tex §10). `sync_port=0` escolhe porta livre (testes).
+  - `src/tracker/sync_client.py` — `SyncClient.propagar_sync`: uma
+    thread daemon por tracker conhecido (flooding paralelo, Listing
+    8.1), fire-and-forget. Falha de conexão marca o destino como
+    suspeito e NÃO retransmite — reconciliação via SEED_REPORT
+    (anti-entropy) ou FULL_SYNC na reintegração (Fase 5); sucesso
+    desmarca. `enviar_full_sync` (montagem do FULL_SYNC a partir do
+    `IndexSnapshot`, incluindo tombstones com `ativo=False`) já pronto
+    para a Fase 5.
+  - `src/tracker/routing.py` — `SearchRouter` (§6.4): busca local
+    primeiro; sem hit e `ttl > 0`, envia `SEARCH_FORWARD(ttl-1)` em
+    paralelo aos trackers ainda não consultados (cache LRU
+    `query_id → set[tracker_id]`, 1024 entradas) e agrega os
+    `SEARCH_RESULT` que chegarem em até `search_forward_timeout_seconds`
+    (2s); atrasados são descartados; sem nada, `resultados=[]`.
+    Resultados de múltiplos trackers são mesclados por hash (união dos
+    peers). **Decisão**: o `SEARCH_RESULT` volta NA MESMA conexão TCP do
+    `SEARCH_FORWARD` — em topologia totalmente conectada a conexão parte
+    do próprio tracker de origem, então responder nela É "devolver
+    direto ao origem_tracker" (Listing 7.2), sem dispatcher de respostas
+    por query_id. `handle_search_forward` (receptor) só busca localmente
+    e nunca re-encaminha: o originador já consulta todos de uma vez
+    (mesma razão do "não é preciso re-flood" do main.tex §8).
+  - `src/tracker/tombstone.py` — `TombstoneReaper`: thread daemon que
+    chama `Index.expire_tombstones` a cada 60s; retenção de 600s (10
+    min) vem de `tombstone_retention_seconds` do YAML. Intervalo e
+    relógio injetáveis (§10).
+  - Hooks (handlers/api/main): `REGISTER_FILE` e `PEER_LEAVE_FILE`
+    propagam via `propagar_sync` após a escrita local, sem bloquear a
+    resposta REST (threads daemon); o tombstone propaga com
+    `ativo: False` e timestamp local. `/search` usa o `SearchRouter`.
+    `SyncClient`/`SearchRouter` são opcionais no `create_app` (§14.4) —
+    `None` mantém o comportamento isolado da Fase 2. `main.py` sobe
+    sync server + reaper antes do uvicorn. **Limitação conhecida**: os
+    tombstones gerados por `PEER_LEAVE` e pelo anti-entropy do
+    `SEED_REPORT` ainda não propagam (fora do escopo pedido na Fase 4;
+    entram com o failure detector na Fase 5).
+  - `config/tracker-2.yaml` e `config/tracker-3.yaml` (portas
+    8002/9002 e 8003/9003); apenas tracker-1 com `is_bootstrap: true`.
+  - Testes: `tests/integration/test_lww.py` (timestamp maior vence,
+    menor perde, empate vence maior tracker_id nas duas ordens de
+    chegada, replay idêntico descartado, registro novo remove tombstone,
+    registro atrasado não ressuscita removido),
+    `tests/integration/test_tombstone.py` (SYNC_TABLE `ativo=False` vira
+    tombstone, expiração só após 600s, seletiva por idade, reaper em
+    background — relógio fake §10), `tests/integration/test_sync_flooding.py`
+    (3 trackers reais em portas dinâmicas: REGISTER_FILE no tracker-1
+    aparece nos índices LOCAIS de 2 e 3 em < 3s com `hash_to_peers`
+    idêntico nas três réplicas; PEER_LEAVE_FILE propaga tombstone
+    preservando a outra fonte; tracker morto não trava o REGISTER_FILE
+    e vira suspeito) e `tests/integration/test_search_forward.py`
+    (cluster SEM flooding: busca no tracker-3 roteia ao tracker-1 e
+    encontra; `ttl=0` não roteia; fonte caída degrada para `[]` dentro
+    do timeout). Helper `tests/integration/cluster.py` sobe N trackers
+    completos (Index + SyncServer + uvicorn) em threads. Suíte
+    completa: 144 testes em ~24 s.
+- Demonstração manual executada: 3 trackers em processos separados
+  (bootstrap primeiro), REGISTER_FILE via REST no tracker-1, busca nos
+  trackers 2 e 3 retornando o hash em ~2s; tracker-2 morto, novo
+  REGISTER_FILE no tracker-1 respondeu em 62 ms (sem travar) e o log
+  registrou `destino=tracker-2 ... marcado suspeito`, com o tracker-3
+  recebendo a atualização normalmente.
 - **Fase 3 — Peer básico** (§9 do `CLAUDE.md`): UM peer com download
   SEQUENCIAL (paralelo só na Fase 5), sem fallback de tracker (Fase 5)
   e sem sync entre trackers (Fase 4):
