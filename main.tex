@@ -498,7 +498,7 @@ TRACKER_ANNOUNCE = {
 # Reatribuicao de peer ao tracker reintegrado (tracker ATIVO -> peer)
 # Apesar do nome, esta mensagem e' enviada AO PEER (nao a outro tracker):
 # informa que o peer deve agora se reportar a outro tracker, e nao mais
-# ao atual. Usada no rebalanceamento da Secao 15.3.
+# ao atual. Usada no rebalanceamento da Secao 16.3.
 REASSIGN_TRACKER = {
     "type":               "REASSIGN_TRACKER",
     "peer_nome":          "string",
@@ -888,14 +888,102 @@ A operação simétrica --- \textbf{remover} um peer do conjunto de fontes --- j
 O PeerSpot \textbf{não necessita de exclusão mútua distribuída} entre trackers: para adições, a comutatividade torna a coordenação supérflua; para remoções, o LWW sobre relógios NTP-sincronizados resolve conflitos a posteriori. A exclusão mútua necessária é apenas local, dentro de cada tracker, resolvida com locks de threading padrão. Tanenbaum (Cap.~5.3) aponta que algoritmos de exclusão mútua distribuída (como Ricart-Agrawala ou baseados em token) introduzem latência e complexidade significativas, e devem ser evitados quando a semântica das operações permite.
 
 % ============================================================
-\section{Tolerância a Falhas de Tracker}
+\section{Replicação e Consistência}\label{sec:replicacao}
 % ============================================================
 
-\subsection{Não há tracker líder, não há necessidade de eleição}
+O Cap.~7 do Tanenbaum trata replicação e consistência como duas faces do mesmo problema: replicar dados melhora desempenho e tolerância a falhas (Cap.~7.1), mas obriga o sistema a manter as cópias coerentes entre si. No PeerSpot, as decisões sobre esse tema já aparecem distribuídas ao longo do documento --- na arquitetura de super peers (Seção~1), na sincronização entre trackers (Seção~8), na escolha de relógio real e \textit{Last Write Wins} (Seção~13) e na tolerância a falhas (Seção~\ref{sec:tolerancia}). Esta seção consolida essas escolhas e responde, de forma explícita, às cinco questões centrais de replicação do projeto.
+
+\subsection{Haverá replicação? O que será replicado?}
+
+Sim. O PeerSpot replica dados em \textbf{dois níveis independentes}, com naturezas distintas:
+
+\begin{itemize}
+    \item \textbf{Índice (metadados) --- replicação total entre trackers.} Todos os trackers formam uma rede totalmente conectada e mantêm \textbf{cópias completas do índice global} (Seção~2.1): as tabelas \texttt{nome→hash}, \texttt{hash→\{peers\}} e \texttt{nome\_peer→ip:porta}. Não há partição do índice nem réplica primária --- cada tracker é uma réplica integral. Trata-se, na terminologia do Cap.~7.1, de \textit{full replication}, motivada principalmente por \textbf{tolerância a falhas} (a queda de um tracker não derruba o serviço de busca) e por \textbf{desempenho de leitura} (toda busca é respondida localmente, sem coordenação).
+
+    \item \textbf{Arquivos (conteúdo) --- replicação iniciada pelo cliente entre peers.} O conteúdo de áudio é replicado organicamente: ao concluir um download, o peer reenvia \texttt{REGISTER\_FILE} e passa a ser uma nova fonte do arquivo (Seção~2.2). Esse é exatamente o padrão de \textbf{replicação iniciada pelo cliente} (\textit{client-initiated replicas}, Cap.~7.4.2): cada cópia baixada amplia a disponibilidade e a banda agregada de servir, sem qualquer coordenação central.
+\end{itemize}
+
+\paragraph{Uma assimetria importante.}
+Os arquivos são \textbf{endereçados por conteúdo} (hash SHA-256, Seção~11.2) e, portanto, \textbf{imutáveis}: duas réplicas de um mesmo hash são necessariamente idênticas e nunca entram em conflito. Por isso, \textbf{todo o problema de consistência do PeerSpot recai exclusivamente sobre o índice}, não sobre os arquivos. As subseções a seguir tratam, então, da consistência das réplicas do índice mantidas pelos trackers.
+
+\subsection{Qual modelo de consistência será adotado?}\label{sec:modelo_consistencia}
+
+O PeerSpot adota \textbf{consistência eventual} (\textit{eventual consistency}, Cap.~7.2.2) para o índice replicado. O sistema aceita explicitamente inconsistências transitórias de curta duração (no máximo alguns minutos, até a próxima rodada de \texttt{SEED\_REPORT}) em troca de uma implementação simples e altamente disponível; na ausência de novas atualizações conflitantes, todas as réplicas convergem para o mesmo estado (Seção~8.3).
+
+A viabilidade desse modelo fraco apoia-se na \textbf{semântica das operações} sobre o índice, detalhada na Seção~\ref{sec:exclusao_mutua}:
+
+\begin{itemize}
+    \item \textbf{Adições são comutativas.} Registrar um peer como fonte de um hash é uma operação aditiva: a ordem em que trackers distintos registram peers diferentes é irrelevante, pois o resultado é a união dos conjuntos. Isso aproxima a estrutura \texttt{hash→\{peers\}} de um \textbf{G-Set} (CRDT \textit{grow-only}), eliminando \textit{write-write conflicts} no caso dominante.
+    \item \textbf{Remoções são resolvidas por LWW.} A remoção não é comutativa com a adição; o sistema a representa como uma escrita explícita (\textit{tombstone}) com \texttt{timestamp} e resolve eventuais conflitos por \textbf{Last Write Wins} (Seção~\ref{sec:lww}).
+\end{itemize}
+
+Modelos de consistência forte (sequencial ou linearizável, Cap.~7.3) foram descartados: exigiriam coordenação síncrona entre trackers a cada escrita, introduzindo latência e um ponto de serialização que contraria os objetivos de disponibilidade e simplicidade do projeto. Como o dado replicado é apenas o \textit{índice de disponibilidade} --- e não o arquivo em si --- o custo de uma janela de inconsistência de segundos é baixo: no pior caso, uma busca retorna um peer que acabou de sair, e o cliente simplesmente tenta a próxima fonte.
+
+\subsection{Como distribuir as cópias: estático ou dinâmico?}
+
+Usando a taxonomia de \textit{replica placement} do Cap.~7.4, a resposta difere para cada tipo de réplica:
+
+\begin{itemize}
+    \item \textbf{Réplicas do índice (trackers) --- estáticas, com adesão dinâmica.} O conjunto de trackers é \textbf{permanente} (\textit{permanent replicas}, Cap.~7.4.1): cada \texttt{tracker\_id} é atribuído administrativamente na configuração da rede (Seção~11.2). A colocação base é, portanto, \textbf{estática}. Há, contudo, suporte a \textbf{entrada dinâmica} de novos trackers em tempo de execução, via \textit{bootstrap node} (\texttt{TRACKER\_REJOIN} → \texttt{FULL\_SYNC} → \texttt{TRACKER\_ANNOUNCE}, Seção~8.2), com rebalanceamento de carga na reintegração (Seção~\ref{sec:reintegracao}). A lista de trackers conhecida por cada peer (Listing~\ref{lst:fallback}) é estática no protótipo, com extensão dinâmica prevista pelo campo \texttt{trackers\_conhecidos} (Seção~\ref{sec:reintegracao}).
+    \item \textbf{Réplicas dos arquivos (peers) --- dinâmicas e orientadas a demanda.} Como já dito, são \textit{client-initiated} (Cap.~7.4.2): uma nova cópia surge exatamente quando, e onde, um cliente baixa o arquivo. Não há colocação pré-planejada.
+\end{itemize}
+
+Em resumo: a distribuição é \textbf{estática para o conjunto de trackers} (com mecanismo de entrada dinâmica) e \textbf{dinâmica, orientada a demanda, para os arquivos}.
+
+\subsection{Qual protocolo de consistência?}\label{sec:protocolo_consist}
+
+O índice é mantido por um \textbf{protocolo de escrita replicada sem primário} (\textit{replicated-write} / \textit{active replication}, Cap.~7.5.2): qualquer tracker pode aceitar uma escrita (vinda de um peer local) e propagá-la a todos os demais, sem passar por um coordenador. Concretamente, o protocolo é a composição dos mecanismos já descritos:
+
+\begin{enumerate}
+    \item \textbf{Propagação:} \textit{flooding} sobre TCP unicast --- toda atualização local é enviada em paralelo a todos os trackers via \texttt{SYNC\_TABLE} (Seção~8, Listing~\ref{lst:flooding_tcp}).
+    \item \textbf{Resolução de conflitos:} \textbf{Last Write Wins} sobre \texttt{timestamp}s de relógio real sincronizados por NTP (Seção~\ref{sec:lww}).
+    \item \textbf{Remoções:} registros \textit{tombstone} com timestamp, que tornam a remoção uma escrita ordenável pelo LWW (Seção~13.3).
+    \item \textbf{Reconciliação (\textit{anti-entropy}):} \texttt{SEED\_REPORT} periódico repõe entradas perdidas em partições curtas (Seção~\ref{sec:seed_report}); \texttt{FULL\_SYNC} reconstrói o índice inteiro após partições longas (Seção~\ref{sec:reintegracao}).
+\end{enumerate}
+
+\paragraph{Por que não os outros protocolos do Cap.~7.5.}
+Um protocolo \textbf{baseado em primário} (\textit{primary-based}, Cap.~7.5.1) foi descartado porque exigiria eleger e manter um tracker líder --- justamente o que a Seção~\ref{sec:sem_lider} evita, mantendo todos os trackers equivalentes e dispensando algoritmos de eleição. Protocolos baseados em \textbf{quórum} (\textit{quorum-based}, Cap.~7.5.3) também foram descartados: votação de leitura/escrita só se justifica quando há \textit{write-write conflicts} a serializar, o que a comutatividade das adições e o LWW das remoções tornam desnecessário aqui.
+
+\subsection{Limitações e Trade-offs Assumidos}\label{sec:limit_repl}
+
+Por transparência, registram-se duas limitações conscientes desta estratégia:
+
+\paragraph{Durabilidade dos arquivos.}
+Como a replicação de conteúdo é puramente \textit{client-initiated}, o sistema \textbf{não garante um fator mínimo de réplicas} por arquivo. Se o único peer que possui determinado arquivo sai da rede, o arquivo torna-se temporariamente indisponível --- não há \textit{server-initiated replication} (Cap.~7.4.2) que promova cópias proativamente para preservar a disponibilidade. Para o escopo do trabalho isso é aceitável; como evolução, poder-se-ia introduzir um \textbf{fator de replicação mínimo}, com os trackers instruindo peers ociosos a pré-buscar arquivos pouco replicados.
+
+\paragraph{Custo da replicação total do índice.}
+Manter o índice inteiro em cada tracker é ótimo para tolerância a falhas e latência de busca, mas implica custo de memória proporcional ao total de entradas \textbf{em cada} tracker. Para a escala-alvo do projeto (tipicamente 2--5 trackers e um catálogo moderado) o custo é trivial; para um catálogo de milhões de arquivos, o particionamento do índice (por exemplo, via DHT, Cap.~2.4.1) seria preferível --- alternativa avaliada e descartada na Seção~1.3 pela complexidade adicional.
+
+\subsection{Síntese}
+
+A Tabela~\ref{tab:replicacao} resume as decisões de replicação e consistência do PeerSpot, respondendo diretamente às cinco questões de projeto.
+
+\begin{table}[H]
+\centering
+\begin{tabularx}{\textwidth}{lX}
+\toprule
+\textbf{Questão} & \textbf{Decisão no PeerSpot} \\
+\midrule
+Haverá replicação? & Sim, em dois níveis: índice (entre trackers) e arquivos (entre peers). \\
+O que é replicado? & Índice: tabelas \texttt{nome→hash}, \texttt{hash→\{peers\}} e \texttt{nome\_peer→ip:porta} (réplica total). Arquivos: chunks de áudio endereçados por hash. \\
+Modelo de consistência & Consistência eventual; arquivos imutáveis dispensam consistência (apenas o índice precisa convergir). \\
+Distribuição das cópias & Trackers: estática (permanente), com entrada dinâmica via \textit{bootstrap}. Arquivos: dinâmica, \textit{client-initiated}. \\
+Protocolo de consistência & Escrita replicada sem primário: \textit{flooding} TCP + LWW (NTP) + \textit{tombstones} + \textit{anti-entropy} (\texttt{SEED\_REPORT} / \texttt{FULL\_SYNC}). \\
+\bottomrule
+\end{tabularx}
+\caption{Resumo das decisões de replicação e consistência.}
+\label{tab:replicacao}
+\end{table}
+
+% ============================================================
+\section{Tolerância a Falhas}\label{sec:tolerancia}
+% ============================================================
+
+\subsection{Não há tracker líder, não há necessidade de eleição}\label{sec:sem_lider}
 
 No PeerSpot, todos os trackers são equivalentes e mantêm cópias sincronizadas do índice global. Não existe tracker primário nem hierarquia entre eles, portanto não há necessidade de algoritmo de eleição. Tanenbaum (Cap.~5.4) aponta que algoritmos de eleição são necessários apenas quando o sistema depende de um coordenador único, o que não é o caso aqui.
 
-\subsection{Fallback no peer}
+\subsection{Fallback no peer}\label{sec:fallback_peer}
 
 Cada peer mantém localmente uma lista ordenada de trackers conhecidos: o tracker principal e um ou mais trackers de backup. Quando o peer detecta que o tracker principal não responde (timeout na conexão duradoura), tenta o próximo da lista automaticamente, sem qualquer coordenação com outros nós da rede:
 
@@ -930,92 +1018,81 @@ Como cada tracker ativo calcula sua cessão de forma independente, há risco de 
 \paragraph{Sobre a lista \texttt{TRACKERS} no peer.}
 A lista de trackers que cada peer mantém localmente (Listing~\ref{lst:fallback}) é estática no código apresentado. Para suportar a adição dinâmica de trackers descrita na Seção~8.2, a lista pode ser estendida por uma resposta opcional do tracker em qualquer comunicação subsequente, incluindo um campo \texttt{trackers\_conhecidos} com o conjunto atual de trackers ativos. O peer atualiza sua lista local com essa informação. Para simplicidade do protótipo, no escopo deste trabalho assumimos a lista estática, mas a limitação é registrada aqui explicitamente.
 
-% ============================================================
-\section{Replicação e Consistência}\label{sec:replicacao}
-% ============================================================
+\subsection{Disponibilidade ou Confiabilidade?}\label{sec:disp_conf}
 
-O Cap.~7 do Tanenbaum trata replicação e consistência como duas faces do mesmo problema: replicar dados melhora desempenho e tolerância a falhas (Cap.~7.1), mas obriga o sistema a manter as cópias coerentes entre si. No PeerSpot, as decisões sobre esse tema já aparecem distribuídas ao longo do documento --- na arquitetura de super peers (Seção~1), na sincronização entre trackers (Seção~8), na escolha de relógio real e \textit{Last Write Wins} (Seção~13) e na tolerância a falhas (Seção~15). Esta seção consolida essas escolhas e responde, de forma explícita, às cinco questões centrais de replicação do projeto.
+Tanenbaum (Cap.~8.1) decompõe a \textit{dependability} em quatro propriedades, das quais duas competem diretamente neste projeto: \textbf{disponibilidade} (\textit{availability} --- estar pronto para uso a qualquer instante) e \textbf{confiabilidade} (\textit{reliability} --- operar continuamente, sem falhas, por um período prolongado).
 
-\subsection{Haverá replicação? O que será replicado?}
+Para o PeerSpot, prioriza-se a \textbf{disponibilidade}. A justificativa decorre do domínio: em um serviço de compartilhamento de música, é preferível que uma busca retorne rapidamente um resultado \textit{possivelmente} desatualizado (por exemplo, um peer que acabou de sair) a que o sistema bloqueie a resposta até obter certeza absoluta. Essa preferência é coerente com todas as escolhas já feitas: \textit{full replication} do índice (qualquer tracker responde), fallback imediato do peer para um tracker de backup (Seção~\ref{sec:fallback_peer}) e consistência eventual (Seção~\ref{sec:modelo_consistencia}). A confiabilidade estrita --- ausência total de inconsistência transitória --- é deliberadamente relaxada em troca de disponibilidade e simplicidade.
 
-Sim. O PeerSpot replica dados em \textbf{dois níveis independentes}, com naturezas distintas:
+\subsection{Tipos de Falha que se Deseja Tolerar}
 
-\begin{itemize}
-    \item \textbf{Índice (metadados) --- replicação total entre trackers.} Todos os trackers formam uma rede totalmente conectada e mantêm \textbf{cópias completas do índice global} (Seção~2.1): as tabelas \texttt{nome→hash}, \texttt{hash→\{peers\}} e \texttt{nome\_peer→ip:porta}. Não há partição do índice nem réplica primária --- cada tracker é uma réplica integral. Trata-se, na terminologia do Cap.~7.1, de \textit{full replication}, motivada principalmente por \textbf{tolerância a falhas} (a queda de um tracker não derruba o serviço de busca) e por \textbf{desempenho de leitura} (toda busca é respondida localmente, sem coordenação).
-
-    \item \textbf{Arquivos (conteúdo) --- replicação iniciada pelo cliente entre peers.} O conteúdo de áudio é replicado organicamente: ao concluir um download, o peer reenvia \texttt{REGISTER\_FILE} e passa a ser uma nova fonte do arquivo (Seção~2.2). Esse é exatamente o padrão de \textbf{replicação iniciada pelo cliente} (\textit{client-initiated replicas}, Cap.~7.4.2): cada cópia baixada amplia a disponibilidade e a banda agregada de servir, sem qualquer coordenação central.
-\end{itemize}
-
-\paragraph{Uma assimetria importante.}
-Os arquivos são \textbf{endereçados por conteúdo} (hash SHA-256, Seção~11.2) e, portanto, \textbf{imutáveis}: duas réplicas de um mesmo hash são necessariamente idênticas e nunca entram em conflito. Por isso, \textbf{todo o problema de consistência do PeerSpot recai exclusivamente sobre o índice}, não sobre os arquivos. As subseções a seguir tratam, então, da consistência das réplicas do índice mantidas pelos trackers.
-
-\subsection{Qual modelo de consistência será adotado?}
-
-O PeerSpot adota \textbf{consistência eventual} (\textit{eventual consistency}, Cap.~7.2.2) para o índice replicado. O sistema aceita explicitamente inconsistências transitórias de curta duração (no máximo alguns minutos, até a próxima rodada de \texttt{SEED\_REPORT}) em troca de uma implementação simples e altamente disponível; na ausência de novas atualizações conflitantes, todas as réplicas convergem para o mesmo estado (Seção~8.3).
-
-A viabilidade desse modelo fraco apoia-se na \textbf{semântica das operações} sobre o índice, detalhada na Seção~\ref{sec:exclusao_mutua}:
+Esta questão já está respondida no documento, na Seção~8.4 (``Modelo de falhas assumido''), e é aqui consolidada com a taxonomia completa de modelos de falha do Cap.~8.1.2:
 
 \begin{itemize}
-    \item \textbf{Adições são comutativas.} Registrar um peer como fonte de um hash é uma operação aditiva: a ordem em que trackers distintos registram peers diferentes é irrelevante, pois o resultado é a união dos conjuntos. Isso aproxima a estrutura \texttt{hash→\{peers\}} de um \textbf{G-Set} (CRDT \textit{grow-only}), eliminando \textit{write-write conflicts} no caso dominante.
-    \item \textbf{Remoções são resolvidas por LWW.} A remoção não é comutativa com a adição; o sistema a representa como uma escrita explícita (\textit{tombstone}) com \texttt{timestamp} e resolve eventuais conflitos por \textbf{Last Write Wins} (Seção~\ref{sec:lww}).
+    \item \textbf{Crash (parada):} \textbf{tolerada}. É o modelo central assumido --- peers e trackers podem parar abruptamente. A tolerância vem da \textit{full replication} do índice e da auto-replicação dos arquivos.
+    \item \textbf{Omissão (perda de mensagens):} \textbf{tolerada/mitigada}. Mensagens perdidas são repostas pela reconciliação \textit{anti-entropy} (\texttt{SEED\_REPORT}) e pelo \texttt{FULL\_SYNC} na reintegração; o uso de TCP unicast já elimina a maior parte das omissões de transporte.
+    \item \textbf{Falha de resposta (resposta incorreta):} \textbf{fora do escopo}. Assume-se que um processo que responde, responde corretamente; respostas semanticamente erradas não são tratadas. Na prática, uma resposta ausente recai no caso de crash/omissão.
+    \item \textbf{Falha temporal (\textit{timing}):} \textbf{fora do escopo}. Assume-se NTP em funcionamento (Seção~13.1); desvios de relógio dentro da margem do NTP são absorvidos pelo LWW.
+    \item \textbf{Arbitrária / bizantina:} \textbf{fora do escopo}. Não se assume comportamento malicioso ou arbitrário dos nós; não há votação nem assinatura para detectar mentiras.
 \end{itemize}
 
-Modelos de consistência forte (sequencial ou linearizável, Cap.~7.3) foram descartados: exigiriam coordenação síncrona entre trackers a cada escrita, introduzindo latência e um ponto de serialização que contraria os objetivos de disponibilidade e simplicidade do projeto. Como o dado replicado é apenas o \textit{índice de disponibilidade} --- e não o arquivo em si --- o custo de uma janela de inconsistência de segundos é baixo: no pior caso, uma busca retorna um peer que acabou de sair, e o cliente simplesmente tenta a próxima fonte.
+Em suma, o PeerSpot adota o \textbf{modelo \textit{fail-stop} / \textit{crash}} (Cap.~8.1.2), com mitigação de omissões.
 
-\subsection{Como distribuir as cópias: estático ou dinâmico?}
+\subsection{Quantos Processos Falhantes Serão Suportados?}
 
-Usando a taxonomia de \textit{replica placement} do Cap.~7.4, a resposta difere para cada tipo de réplica:
+O PeerSpot \textbf{não usa votação por quórum nem acordo bizantino}, logo não se aplica o limite clássico de $k+1$ réplicas para tolerar $k$ falhas \textit{crash} (ou $2k+1$ para falhas bizantinas) do Cap.~8.2. A tolerância decorre diretamente do grau de replicação:
 
 \begin{itemize}
-    \item \textbf{Réplicas do índice (trackers) --- estáticas, com adesão dinâmica.} O conjunto de trackers é \textbf{permanente} (\textit{permanent replicas}, Cap.~7.4.1): cada \texttt{tracker\_id} é atribuído administrativamente na configuração da rede (Seção~11.2). A colocação base é, portanto, \textbf{estática}. Há, contudo, suporte a \textbf{entrada dinâmica} de novos trackers em tempo de execução, via \textit{bootstrap node} (\texttt{TRACKER\_REJOIN} → \texttt{FULL\_SYNC} → \texttt{TRACKER\_ANNOUNCE}, Seção~8.2), com rebalanceamento de carga na reintegração (Seção~\ref{sec:reintegracao}). A lista de trackers conhecida por cada peer (Listing~\ref{lst:fallback}) é estática no protótipo, com extensão dinâmica prevista pelo campo \texttt{trackers\_conhecidos} (Seção~\ref{sec:reintegracao}).
-    \item \textbf{Réplicas dos arquivos (peers) --- dinâmicas e orientadas a demanda.} Como já dito, são \textit{client-initiated} (Cap.~7.4.2): uma nova cópia surge exatamente quando, e onde, um cliente baixa o arquivo. Não há colocação pré-planejada.
+    \item \textbf{Trackers:} como o índice é replicado integralmente nos $N$ trackers, o serviço de busca permanece disponível enquanto \textbf{ao menos um} tracker estiver no ar --- ou seja, tolera-se a falha simultânea de até $N-1$ trackers. Os peers redirecionam-se automaticamente ao próximo tracker da lista (Seção~\ref{sec:fallback_peer}).
+    \item \textbf{Arquivos:} um arquivo permanece acessível enquanto \textbf{ao menos um} peer que o possui (\textit{seed}) estiver on-line. Se um arquivo tem $r$ réplicas, tolera-se a perda de até $r-1$ delas. Como $r$ não é controlado pelo sistema (replicação \textit{client-initiated}), não há garantia de um piso para $r$ --- limitação já registrada na Seção~\ref{sec:limit_repl}.
 \end{itemize}
 
-Em resumo: a distribuição é \textbf{estática para o conjunto de trackers} (com mecanismo de entrada dinâmica) e \textbf{dinâmica, orientada a demanda, para os arquivos}.
+\subsection{Estratégias para Detectar Falhas}
 
-\subsection{Qual protocolo de consistência?}
+Também já respondida no documento (Seções~8.4 e~15.2) e aqui consolidada. A detecção é sempre baseada em \textbf{timeout} sobre comunicação periódica ou sobre conexões, conforme o Cap.~8.2.8:
 
-O índice é mantido por um \textbf{protocolo de escrita replicada sem primário} (\textit{replicated-write} / \textit{active replication}, Cap.~7.5.2): qualquer tracker pode aceitar uma escrita (vinda de um peer local) e propagá-la a todos os demais, sem passar por um coordenador. Concretamente, o protocolo é a composição dos mecanismos já descritos:
+\begin{itemize}
+    \item \textbf{Falha de peer, detectada pelo tracker:} a ausência de \texttt{SEED\_REPORT} por duas rodadas consecutivas (6~min) marca o peer como falho (Seção~8.4). Funciona como \textit{gossip-based failure detection}: a detecção é subproduto da troca periódica de informação.
+    \item \textbf{Falha de tracker, detectada pelo peer:} \textit{timeout} na conexão duradoura dispara o fallback para o próximo tracker da lista (Seção~\ref{sec:fallback_peer}).
+    \item \textbf{Falha de tracker, detectada por outro tracker:} \textit{timeout} ou \texttt{ConnectionRefusedError} ao tentar enviar \texttt{SYNC\_TABLE} marca o tracker como suspeito (\texttt{marcar\_tracker\_suspeito}, Listing~\ref{lst:flooding_tcp}).
+\end{itemize}
+
+\subsection{Qual Protocolo Utilizar?}
+
+O PeerSpot \textbf{não emprega protocolo de consenso} (Paxos, Raft) nem \textbf{commit distribuído} (2PC/3PC, Cap.~8.5). Essa ausência é uma decisão de projeto, não uma lacuna: como não há tracker líder (Seção~\ref{sec:sem_lider}) nem \textit{write-write conflicts} a serializar (Seção~\ref{sec:modelo_consistencia}), não existe decisão sobre a qual os nós precisem chegar a um acordo atômico. A resiliência é obtida pela combinação de quatro mecanismos:
 
 \begin{enumerate}
-    \item \textbf{Propagação:} \textit{flooding} sobre TCP unicast --- toda atualização local é enviada em paralelo a todos os trackers via \texttt{SYNC\_TABLE} (Seção~8, Listing~\ref{lst:flooding_tcp}).
-    \item \textbf{Resolução de conflitos:} \textbf{Last Write Wins} sobre \texttt{timestamp}s de relógio real sincronizados por NTP (Seção~\ref{sec:lww}).
-    \item \textbf{Remoções:} registros \textit{tombstone} com timestamp, que tornam a remoção uma escrita ordenável pelo LWW (Seção~13.3).
-    \item \textbf{Reconciliação (\textit{anti-entropy}):} \texttt{SEED\_REPORT} periódico repõe entradas perdidas em partições curtas (Seção~\ref{sec:seed_report}); \texttt{FULL\_SYNC} reconstrói o índice inteiro após partições longas (Seção~\ref{sec:reintegracao}).
+    \item \textbf{Comunicação confiável ponto a ponto:} TCP unicast garante entrega ordenada ou erro explícito, dispensando \textit{reliable multicast} (Cap.~8.4), conforme já discutido na Seção~8.3.
+    \item \textbf{Detecção de falhas por timeout} (subseção anterior).
+    \item \textbf{Redundância por replicação:} \textit{full replication} do índice e auto-replicação dos arquivos.
+    \item \textbf{Recuperação por transferência de estado:} \texttt{FULL\_SYNC} reconstrói o índice de um tracker reintegrado (Seção~\ref{sec:reintegracao}).
 \end{enumerate}
 
-\paragraph{Por que não os outros protocolos do Cap.~7.5.}
-Um protocolo \textbf{baseado em primário} (\textit{primary-based}, Cap.~7.5.1) foi descartado porque exigiria eleger e manter um tracker líder --- justamente o que a Seção~15.1 evita, mantendo todos os trackers equivalentes e dispensando algoritmos de eleição. Protocolos baseados em \textbf{quórum} (\textit{quorum-based}, Cap.~7.5.3) também foram descartados: votação de leitura/escrita só se justifica quando há \textit{write-write conflicts} a serializar, o que a comutatividade das adições e o LWW das remoções tornam desnecessário aqui.
+\subsection{Consequências do Teorema CAP}
 
-\subsection{Limitações e Trade-offs Assumidos}
+O teorema CAP (Brewer) afirma que, na presença de uma \textbf{partição de rede} (P), um sistema distribuído não pode garantir simultaneamente \textbf{consistência forte} (C) e \textbf{disponibilidade} (A): é preciso escolher entre C e A.
 
-Por transparência, registram-se duas limitações conscientes desta estratégia:
+O PeerSpot é deliberadamente um sistema \textbf{AP} (\textit{available} e \textit{partition-tolerant}): diante de uma partição entre trackers, cada lado continua \textbf{respondendo a buscas e aceitando registros} com seu índice local (privilegia A), abrindo mão de consistência forte (sacrifica C) e operando sob \textbf{consistência eventual}. Curada a partição, os índices reconvergem via \textit{anti-entropy} (\texttt{SEED\_REPORT}) e \texttt{FULL\_SYNC}, com conflitos resolvidos por LWW (Seção~\ref{sec:protocolo_consist}).
 
-\paragraph{Durabilidade dos arquivos.}
-Como a replicação de conteúdo é puramente \textit{client-initiated}, o sistema \textbf{não garante um fator mínimo de réplicas} por arquivo. Se o único peer que possui determinado arquivo sai da rede, o arquivo torna-se temporariamente indisponível --- não há \textit{server-initiated replication} (Cap.~7.4.2) que promova cópias proativamente para preservar a disponibilidade. Para o escopo do trabalho isso é aceitável; como evolução, poder-se-ia introduzir um \textbf{fator de replicação mínimo}, com os trackers instruindo peers ociosos a pré-buscar arquivos pouco replicados.
+As consequências práticas dessa escolha para o projeto são:
+\begin{itemize}
+    \item Durante uma partição, dois trackers podem ter visões momentaneamente divergentes do índice (ex.: um peer visível de um lado e não do outro). Isso é aceitável: a inconsistência é transitória e o impacto é apenas uma busca que pode falhar e ser repetida.
+    \item Não há cenário em que o sistema fique \textbf{indisponível} para preservar consistência --- a opção oposta (CP) exigiria, por exemplo, bloquear escritas sem quórum, contrariando o objetivo de disponibilidade da Seção~\ref{sec:disp_conf}.
+    \item Como os arquivos são imutáveis (endereçados por hash), a partição nunca causa divergência de \textit{conteúdo}, apenas de \textit{disponibilidade de fontes} --- o que torna o custo de escolher A especialmente baixo.
+\end{itemize}
 
-\paragraph{Custo da replicação total do índice.}
-Manter o índice inteiro em cada tracker é ótimo para tolerância a falhas e latência de busca, mas implica custo de memória proporcional ao total de entradas \textbf{em cada} tracker. Para a escala-alvo do projeto (tipicamente 2--5 trackers e um catálogo moderado) o custo é trivial; para um catálogo de milhões de arquivos, o particionamento do índice (por exemplo, via DHT, Cap.~2.4.1) seria preferível --- alternativa avaliada e descartada na Seção~1.3 pela complexidade adicional.
+\subsection{Como Recuperar da Falha?}
 
-\subsection{Síntese}
+A recuperação já está detalhada no documento (Seções~15.2 e~15.3) e é aqui sintetizada no vocabulário do Cap.~8.6, que distingue \textit{recuperação para trás} (\textit{backward recovery}, retornar a um estado salvo) de \textit{recuperação para frente} (\textit{forward recovery}, levar o sistema a um novo estado correto):
 
-A Tabela~\ref{tab:replicacao} resume as decisões de replicação e consistência do PeerSpot, respondendo diretamente às cinco questões de projeto.
+\begin{itemize}
+    \item \textbf{Tracker que cai:} os peers fazem \textbf{recuperação para frente} imediata, migrando para um tracker de backup já sincronizado (Seção~\ref{sec:fallback_peer}), sem perda de serviço.
+    \item \textbf{Tracker que retorna:} executa \textbf{recuperação por transferência de estado} --- \texttt{TRACKER\_REJOIN} seguido de \texttt{FULL\_SYNC} reconstrói todo o índice a partir de um tracker ativo (Seção~\ref{sec:reintegracao}), equivalendo a restaurar um \textit{checkpoint} global atual em vez de reaplicar um log de operações. Em seguida ocorre o rebalanceamento de carga (Seção~\ref{sec:reintegracao}).
+    \item \textbf{Partição curta:} a reconciliação \textit{anti-entropy} via \texttt{SEED\_REPORT} repõe entradas perdidas sem intervenção (Seção~8.3).
+    \item \textbf{Peer que cai:} suas entradas são removidas por \textit{tombstone} após o timeout de \texttt{SEED\_REPORT} (Seção~8.4); ao voltar, o peer simplesmente se re-registra e volta a constar como fonte.
+\end{itemize}
 
-\begin{table}[H]
-\centering
-\begin{tabularx}{\textwidth}{lX}
-\toprule
-\textbf{Questão} & \textbf{Decisão no PeerSpot} \\
-\midrule
-Haverá replicação? & Sim, em dois níveis: índice (entre trackers) e arquivos (entre peers). \\
-O que é replicado? & Índice: tabelas \texttt{nome→hash}, \texttt{hash→\{peers\}} e \texttt{nome\_peer→ip:porta} (réplica total). Arquivos: chunks de áudio endereçados por hash. \\
-Modelo de consistência & Consistência eventual; arquivos imutáveis dispensam consistência (apenas o índice precisa convergir). \\
-Distribuição das cópias & Trackers: estática (permanente), com entrada dinâmica via \textit{bootstrap}. Arquivos: dinâmica, \textit{client-initiated}. \\
-Protocolo de consistência & Escrita replicada sem primário: \textit{flooding} TCP + LWW (NTP) + \textit{tombstones} + \textit{anti-entropy} (\texttt{SEED\_REPORT} / \texttt{FULL\_SYNC}). \\
-\bottomrule
-\end{tabularx}
-\caption{Resumo das decisões de replicação e consistência.}
-\label{tab:replicacao}
-\end{table}
+Como o estado durável (índice em memória) é sempre reconstruível a partir das réplicas vivas ou dos próprios peers, o PeerSpot \textbf{não necessita de \textit{checkpointing} em disco nem de \textit{message logging}} (Cap.~8.6) para os trackers: o ``checkpoint'' é, na prática, o estado de qualquer réplica ativa.
+
 
 \end{document}
