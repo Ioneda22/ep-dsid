@@ -8,10 +8,12 @@ Espelha o ``servidor_sync``/``tratar_conexao`` do Listing 8.1 do
 Mensagens atendidas nesta fase:
 
 * ``SYNC_TABLE`` — aplica cada entry via ``Index.apply_sync_entry`` (LWW);
+* ``FULL_SYNC`` — aplica o estado completo via ``Index.apply_full_sync``
+  (LWW); é a reconciliação anti-entropy periódica entre trackers;
 * ``SEARCH_FORWARD`` — busca local e devolve ``SEARCH_RESULT`` na mesma
   conexão (ver ``src.tracker.routing``);
-* ``TRACKER_REJOIN`` / ``TRACKER_ANNOUNCE`` / ``FULL_SYNC`` — reconhecidas
-  e logadas, mas ignoradas até a Fase 5 (reintegração).
+* ``TRACKER_REJOIN`` / ``TRACKER_ANNOUNCE`` — reconhecidas e logadas, mas
+  ignoradas até a Fase 5 (reintegração de trackers).
 """
 
 from __future__ import annotations
@@ -22,7 +24,7 @@ import threading
 
 from pydantic import ValidationError
 
-from src.common.messages import SearchForward, SyncTable
+from src.common.messages import FullSync, SearchForward, SyncTable
 from src.common.protocol import (
     ConnectionClosedError,
     MessageReader,
@@ -34,8 +36,8 @@ from src.tracker.routing import handle_search_forward
 
 logger = logging.getLogger(__name__)
 
-#: Tipos reconhecidos porém fora do escopo da Fase 4 (reintegração — Fase 5).
-_TIPOS_FASE_5 = ("TRACKER_REJOIN", "TRACKER_ANNOUNCE", "FULL_SYNC")
+#: Tipos reconhecidos porém fora do escopo atual (reintegração — Fase 5).
+_TIPOS_FASE_5 = ("TRACKER_REJOIN", "TRACKER_ANNOUNCE")
 
 
 class SyncServer:
@@ -153,6 +155,8 @@ class SyncServer:
         try:
             if tipo == "SYNC_TABLE":
                 self._tratar_sync_table(header)
+            elif tipo == "FULL_SYNC":
+                self._tratar_full_sync(header)
             elif tipo == "SEARCH_FORWARD":
                 self._tratar_search_forward(header, conn)
             elif tipo in _TIPOS_FASE_5:
@@ -196,6 +200,22 @@ class SyncServer:
             self.tracker_id,
             msg.origem,
             msg.timestamp,
+            len(msg.entries),
+            aplicadas,
+        )
+
+    def _tratar_full_sync(self, header: dict[str, object]) -> None:
+        msg = FullSync.model_validate(header)
+        if msg.origem == self.tracker_id:
+            # Defensivo: o push de anti-entropy nunca se inclui na lista de
+            # destinos, mas ignorar o próprio eco é barato e seguro.
+            logger.debug("tracker_id=%s ignorou eco de FULL_SYNC", self.tracker_id)
+            return
+        aplicadas = self.index.apply_full_sync(msg.entries)
+        logger.info(
+            "FULL_SYNC: tracker_id=%s origem=%s entries=%d aplicadas=%d",
+            self.tracker_id,
+            msg.origem,
             len(msg.entries),
             aplicadas,
         )

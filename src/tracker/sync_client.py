@@ -147,6 +147,34 @@ class SyncClient:
         ).model_dump()
         return self.enviar_unicast(tracker_destino, mensagem)
 
+    def propagar_full_sync(
+        self,
+        snapshot: IndexSnapshot,
+        trackers_conhecidos: list[FullSyncTracker] | None = None,
+    ) -> None:
+        """Faz *push* do estado completo (``FULL_SYNC``) a cada tracker conhecido.
+
+        É a reconciliação anti-entropy periódica entre trackers (main.tex
+        §"Reconciliação anti-entropy"): uma thread daemon por destino,
+        *best-effort* igual ao :meth:`propagar_sync` — falha marca o destino
+        suspeito e NÃO retransmite, pois a próxima rodada repara. A mensagem
+        é montada uma única vez e reusada em todos os envios.
+        """
+        if not self.known_trackers:
+            return
+        mensagem = FullSync(
+            origem=self.tracker_id,
+            entries=_entries_do_snapshot(snapshot),
+            trackers_conhecidos=trackers_conhecidos or [],
+        ).model_dump()
+        for tracker in self.known_trackers:
+            threading.Thread(
+                target=self.enviar_unicast,
+                args=(tracker, mensagem),
+                name=f"anti-entropy-{tracker.tracker_id}",
+                daemon=True,
+            ).start()
+
     # ------------------------------------------------------------------
     # Suspeitos (marcar_tracker_suspeito do Listing 8.1)
     # ------------------------------------------------------------------
@@ -187,6 +215,7 @@ def _entries_do_snapshot(snapshot: IndexSnapshot) -> list[FullSyncEntry]:
                 porta=e.porta,
                 ativo=True,
                 timestamp=e.timestamp,
+                origem=e.origem,
             )
             for e in snapshot.hash_to_peers.get(hash_arquivo, {}).values()
         ] + [
@@ -196,6 +225,7 @@ def _entries_do_snapshot(snapshot: IndexSnapshot) -> list[FullSyncEntry]:
                 porta=t.porta,
                 ativo=False,
                 timestamp=t.timestamp,
+                origem=t.origem,
             )
             for t in snapshot.tombstones.get(hash_arquivo, {}).values()
         ]

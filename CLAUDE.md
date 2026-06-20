@@ -82,10 +82,11 @@ peerspot/
 │   │   ├── main.py                 # entrypoint: python -m src.tracker.main --config ...
 │   │   ├── api.py                  # FastAPI app: rotas REST para peers
 │   │   ├── index.py                # estado em memória: nome→hash, hash→peers, nome_peer→endereço
-│   │   ├── sync_server.py          # servidor TCP para SYNC_TABLE / TRACKER_REJOIN / TRACKER_ANNOUNCE
-│   │   ├── sync_client.py          # propagação outbound via flooding TCP unicast
+│   │   ├── sync_server.py          # servidor TCP para SYNC_TABLE / FULL_SYNC / SEARCH_FORWARD
+│   │   ├── sync_client.py          # propagação outbound via flooding TCP unicast (SYNC_TABLE/FULL_SYNC)
 │   │   ├── routing.py              # SEARCH_FORWARD entre trackers (TTL, query_id)
 │   │   ├── tombstone.py            # marcação e expiração de tombstones (10 min)
+│   │   ├── anti_entropy.py         # reconciliação anti-entropy periódica (push FULL_SYNC)
 │   │   ├── failure_detector.py     # timeout do SEED_REPORT (2 rodadas = 6 min → tombstone)
 │   │   ├── rebalance.py            # lógica de REASSIGN_TRACKER após TRACKER_REJOIN
 │   │   ├── persistence.py          # SQLite: usuários, playlists
@@ -207,6 +208,7 @@ Códigos de `ERROR` padronizados (defina em `src/common/errors.py`):
 4. **Sincronização** — `src/tracker/sync_server.py` + `sync_client.py`
    - Servidor TCP separado em porta dedicada (default **9001**).
    - Cliente faz flooding TCP unicast paralelo (uma thread por destino).
+   - **Anti-entropy periódico** (`src/tracker/anti_entropy.py`): push de `FULL_SYNC` a todos os trackers a cada `anti_entropy_interval_seconds` (default **180s**), reaplicado via LWW (idempotente) para repor deltas que o `SYNC_TABLE` best-effort tenha perdido. Intervalo mantido < `tombstone_retention_seconds`.
 
 ### 6.2 Índice em memória — `src/tracker/index.py`
 
@@ -272,6 +274,7 @@ seed_report_timeout_seconds: 360       # 6 min = 2 rodadas perdidas
 tombstone_retention_seconds: 600       # 10 min
 sync_outbound_timeout_seconds: 3
 search_forward_timeout_seconds: 2
+anti_entropy_interval_seconds: 180     # 3 min; push FULL_SYNC entre trackers (< retenção do tombstone)
 ```
 
 ---

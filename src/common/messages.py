@@ -214,13 +214,20 @@ class SyncTable(BaseModel):
 
 
 class FullSyncPeer(BaseModel):
-    """Peer dentro de uma entrada de FULL_SYNC (com flag ativo e timestamp)."""
+    """Peer dentro de uma entrada de FULL_SYNC (com flag ativo e timestamp).
+
+    ``origem`` é o tracker que produziu a escrita; viaja no FULL_SYNC para
+    que o receptor aplique o desempate do LWW de forma determinística (mesmo
+    critério do ``SyncTableEntry``). Default ``""`` mantém compatibilidade
+    com remetentes que ainda não preenchem o campo.
+    """
 
     nome_peer: str
     ip: str
     porta: int
     ativo: bool
     timestamp: float
+    origem: str = ""
 
 
 class FullSyncEntry(BaseModel):

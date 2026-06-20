@@ -5,7 +5,9 @@ Sobe, no MESMO processo Python (§8 da tarefa da Fase 4):
 * a API REST (FastAPI/uvicorn) na ``api_port`` — atendimento aos peers;
 * o servidor TCP de sincronização (``SyncServer``) na ``sync_port``,
   em thread própria — flooding ``SYNC_TABLE`` e ``SEARCH_FORWARD``;
-* o ``TombstoneReaper`` (expiração de tombstones a cada 60s).
+* o ``TombstoneReaper`` (expiração de tombstones a cada 60s);
+* o ``AntiEntropyReconciler`` (push periódico de ``FULL_SYNC`` aos demais
+  trackers — reconciliação anti-entropy que repara deltas perdidos).
 
 O failure detector e a reintegração (``TRACKER_REJOIN``) chegam na Fase 5.
 """
@@ -22,6 +24,7 @@ import uvicorn
 
 from src.common.config import load_yaml, require_keys
 from src.common.logging_config import setup_logging
+from src.tracker.anti_entropy import AntiEntropyReconciler
 from src.tracker.api import create_app
 from src.tracker.index import Index
 from src.tracker.persistence import init_db
@@ -62,6 +65,7 @@ class TrackerSettings:
     tombstone_retention_seconds: int = 600
     sync_outbound_timeout_seconds: int = 3
     search_forward_timeout_seconds: int = 2
+    anti_entropy_interval_seconds: int = 180  # 3 min; < retenção do tombstone (600s)
 
 
 def load_tracker_settings(config_path: Path) -> TrackerSettings:
@@ -87,6 +91,9 @@ def load_tracker_settings(config_path: Path) -> TrackerSettings:
         sync_outbound_timeout_seconds=int(cfg.get("sync_outbound_timeout_seconds", 3)),
         search_forward_timeout_seconds=int(
             cfg.get("search_forward_timeout_seconds", 2)
+        ),
+        anti_entropy_interval_seconds=int(
+            cfg.get("anti_entropy_interval_seconds", 180)
         ),
     )
 
@@ -170,6 +177,13 @@ def main(argv: list[str] | None = None) -> None:
         retention_seconds=settings.tombstone_retention_seconds,
     )
     reaper.start()
+    reconciler = AntiEntropyReconciler(
+        tracker_id=settings.tracker_id,
+        index=index,
+        sync_client=sync_client,
+        interval_seconds=settings.anti_entropy_interval_seconds,
+    )
+    reconciler.start()
 
     app = create_app(
         index=index,
@@ -183,6 +197,7 @@ def main(argv: list[str] | None = None) -> None:
         # log_config=None: mantém o logging configurado pelo setup_logging.
         uvicorn.run(app, host=settings.ip, port=settings.api_port, log_config=None)
     finally:
+        reconciler.stop()
         reaper.stop()
         sync_server.stop()
 

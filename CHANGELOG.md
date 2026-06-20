@@ -52,6 +52,44 @@ e o projeto segue [Versionamento Semântico](https://semver.org/lang/pt-BR/).
   `pydantic>=2` explicitado em `requirements.txt`.
 
 ### Adicionado
+- **Reconciliação anti-entropy periódica entre trackers** (fecha o buraco de
+  entropia do `SYNC_TABLE`, decidido com o usuário e refletido no `main.tex`
+  §"Reconciliação anti-entropy"): o `SYNC_TABLE` é incremental e
+  *best-effort* (sem retransmissão), então um tracker que perca um delta mas
+  continue no ar ficaria desatualizado para sempre. A correção é um *push*
+  periódico do estado completo via `FULL_SYNC`, reaplicado por LWW
+  (idempotente), que repara o que divergiu independentemente da causa.
+  Decidimos por anti-entropy em vez de ACK+retransmissão no `SYNC_TABLE`
+  porque um único mecanismo cobre também os casos que o ACK não cobriria
+  (queda do remetente antes de entregar; destino fora do ar por muito tempo).
+  - `src/common/messages.py` — `FullSyncPeer` ganhou `origem` (opcional,
+    default `""`) para o receptor aplicar o desempate do LWW de forma
+    determinística (mesmo critério do `SyncTableEntry`). Refletido no Listing
+    7.2 do `main.tex`.
+  - `src/tracker/index.py` — novo `apply_full_sync(entries)`: converte cada
+    `FullSyncPeer` numa escrita LWW e reaproveita `apply_sync_entry`
+    (timestamp/origem viajam **por peer** no `FULL_SYNC`, não no nível da
+    mensagem). Idempotente: reaplicar o mesmo estado não muda nada.
+  - `src/tracker/sync_client.py` — `propagar_full_sync(snapshot)`: *push*
+    paralelo (uma thread daemon por destino, *best-effort* como o
+    `propagar_sync`); `_entries_do_snapshot` agora carrega `origem` das
+    fontes e tombstones.
+  - `src/tracker/sync_server.py` — `FULL_SYNC` deixou de ser ignorado: é
+    aplicado via `Index.apply_full_sync` (eco do próprio `origem` é
+    descartado). `TRACKER_REJOIN`/`TRACKER_ANNOUNCE` seguem reconhecidos e
+    logados até a Fase 5.
+  - `src/tracker/anti_entropy.py` (novo) — `AntiEntropyReconciler`: thread
+    daemon que faz `propagar_full_sync` a cada `anti_entropy_interval_seconds`
+    (espelha o padrão do `TombstoneReaper`); `reconciliar_agora()` força um
+    ciclo imediato (inicialização/testes §10).
+  - `src/tracker/main.py` sobe o reconciler junto do sync server e do reaper;
+    `anti_entropy_interval_seconds` (default **180s = 3 min**, < retenção do
+    tombstone) entra em `TrackerSettings` e nos `config/tracker-{1,2,3}.yaml`.
+  - Testes: `tests/unit/test_full_sync.py` (apply_full_sync: registra fonte +
+    metadata, aplica tombstone, LWW descarta versão mais antiga, idempotência,
+    desempate por origem) e `tests/integration/test_anti_entropy.py` (3
+    trackers reais: delta e tombstone perdidos pelo flooding são repostos pelo
+    push de `FULL_SYNC`; versão local mais nova não é sobrescrita).
 - **Fase 4 — Sincronização entre trackers** (§9 do `CLAUDE.md`): flooding
   `SYNC_TABLE` sobre TCP unicast com `socket` + `threading` (NUNCA
   asyncio, §11.2), LWW, tombstones com expiração e `SEARCH_FORWARD`.

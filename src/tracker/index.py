@@ -19,7 +19,12 @@ from collections.abc import Callable
 from dataclasses import dataclass
 
 from src.common.errors import NotFoundError, PeerUnknownError
-from src.common.messages import SearchResultEntry, SearchResultPeer, SyncTableEntry
+from src.common.messages import (
+    FullSyncEntry,
+    SearchResultEntry,
+    SearchResultPeer,
+    SyncTableEntry,
+)
 
 
 @dataclass
@@ -324,6 +329,38 @@ class Index:
             else:
                 self._aplicar_tombstone_remoto_locked(entry, origem_tracker, timestamp)
             return True
+
+    def apply_full_sync(self, entries: list[FullSyncEntry]) -> int:
+        """Aplica um ``FULL_SYNC`` inteiro via LWW — reconciliação anti-entropy.
+
+        Cada peer de cada entrada vira uma escrita LWW independente, usando o
+        ``timestamp`` e a ``origem`` que viajam por peer (não no nível da
+        mensagem, ao contrário do ``SYNC_TABLE``). Reaproveita
+        :meth:`apply_sync_entry`, então herda todas as regras de desempate.
+
+        É idempotente: reaplicar o mesmo estado não muda nada (cada entrada
+        empata com a local e é descartada). Essa é a propriedade que torna o
+        anti-entropy periódico seguro — main.tex §"Reconciliação anti-entropy".
+
+        Returns:
+            Quantas entradas ``(hash, peer)`` foram efetivamente aplicadas.
+        """
+        aplicadas = 0
+        for entry in entries:
+            for peer in entry.peers:
+                convertida = SyncTableEntry(
+                    hash=entry.hash,
+                    nome_peer=peer.nome_peer,
+                    ip=peer.ip,
+                    porta=peer.porta,
+                    ativo=peer.ativo,
+                    nome=entry.nome if peer.ativo else None,
+                    tamanho=entry.tamanho if peer.ativo else None,
+                    n_chunks=entry.n_chunks if peer.ativo else None,
+                )
+                if self.apply_sync_entry(convertida, peer.origem, peer.timestamp):
+                    aplicadas += 1
+        return aplicadas
 
     def expire_tombstones(self, retention_seconds: float) -> int:
         """Descarta tombstones mais velhos que ``retention_seconds`` (§6.2).
