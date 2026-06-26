@@ -87,7 +87,7 @@ O modelo que melhor se encaixa para o projeto é o \textbf{P2P Não Estruturado 
     \item \textbf{super peers}: mantêm um índice dos arquivos disponíveis e organizam o acesso
 \end{itemize}
 
-Ao longo deste documento utilizamos o termo \textbf{tracker} no lugar de ``super peer'', em referência ao papel análogo desempenhado pelo tracker do BitTorrent (mencionado por Tanembaum no  Cap. 2.4.4), que pode ser entendido como um servidor que mantém uma conta atualizada de quais peers têm quais chunks de quais arquivos.
+Ao longo deste documento utilizamos o termo \textbf{tracker} no lugar de ``super peer'', em referência ao papel análogo desempenhado pelo tracker do BitTorrent (mencionado por Tanenbaum no Cap. 2.4.4), que pode ser entendido como um servidor que mantém um registro atualizado de quais peers possuem quais chunks de quais arquivos.
 
 No PeerSpot, os trackers acumulam, portanto, duas funções: 
 \begin{itemize}
@@ -102,14 +102,14 @@ A arquitetura cliente-servidor ancora todo o sistema em um único componente cen
 
 \subsection{Por que não P2P não estruturado puro?}
 
-Uma alternativa considerada foi o P2P não estruturado puro, em que cada nó conhece apenas alguns vizinhos e as buscas são feitas por flooding ou random walks. O problema é que o flooding gera muitas mensagens: como cada nó repassa a busca para todos os vizinhos, o tráfego cresce rápido conforme a rede aumenta, o que não escala bem. Já os random walks diminuem esse tráfego, mas em compensação deixam a busca mais lenta.
+Uma alternativa considerada foi o P2P não estruturado puro, em que cada nó conhece apenas alguns vizinhos e as buscas são feitas por flooding ou random walks. O problema é que o flooding gera muitas mensagens. Como cada nó repassa a busca para todos os vizinhos, o tráfego cresce rápido conforme a rede aumenta, o que não escala bem. Já os random walks diminuem esse tráfego, mas em compensação deixam a busca mais lenta.
 
 Como nosso sistema é voltado para compartilhamento de música, em que o usuário espera encontrar o que procura rapidamente, nenhuma das duas opções nos pareceu adequada. Por isso optamos pela abordagem com super peers, que é justamente o que o livro recomenda (Cap. 2.4.3) quando trata da escalabilidade da busca em redes não estruturadas.
 
 \subsection{Por que não P2P estruturado com DHT?}\label{sec:dht}
 Outra opção avaliada foi o P2P estruturado com DHT, que oferece buscas rápidas sem componentes centrais. O gargalo da arquitetura seria o trabalho extra para manter as tabelas de roteamento e redistribuir as chaves sempre que um nó entra ou sai da rede. 
 
-Tanembaum cita no Cap. 2.4.4 uma variante do BitTorrent que troca os trackers por uma DHT auxiliar, mas descartamos essa ideia pelo mesmo motivo: a complexidade adicional não compensa para o escopo do trabalho.
+Tanenbaum cita no Cap. 2.4.4 uma variante do BitTorrent que troca os trackers por uma DHT auxiliar, mas descartamos essa ideia pelo mesmo motivo da DHT pura, já que a complexidade adicional não compensa para o escopo do trabalho.
 
 \subsection{Por que P2P com super peers (trackers)?}
 
@@ -153,7 +153,7 @@ Definida a arquitetura, a seguir descrevemos os dois tipos de componente e como 
 
 \paragraph{Organização dos trackers}
 \begin{itemize}
-    \item Os trackers formam uma rede totalmente conectada: cada tracker mantém uma lista de todos os outros trackers ativos.
+    \item Os trackers formam uma rede totalmente conectada, onde cada tracker mantém uma lista de todos os outros trackers ativos.
     \item  Não há hierarquia entre eles, todos são equivalentes e mantêm cópias sincronizadas do índice global.
 \end{itemize}
 
@@ -161,7 +161,7 @@ Definida a arquitetura, a seguir descrevemos os dois tipos de componente e como 
 \section{Arquitetura de Software Interna}\label{sec:arq-interna}
 % ============================================================
 
-Cada componente possui uma organização interna distinta que serão detalhadas nas seções seguintes.
+Cada componente possui uma organização interna distinta, detalhada nas seções seguintes.
 
 \subsection{Servidor de Metadados / tracker}
 
@@ -188,10 +188,10 @@ A Figura~\ref{fig:tracker-camadas} resume essa organização em camadas dentro d
 Adota \textbf{arquitetura P2P}: não há distinção de papel fixo, o mesmo nó baixa e serve chunks simultaneamente.
 
 \begin{itemize}
-    \item \textbf{Interface:} Mantém a CLI responsiva as ações do usuário
+    \item \textbf{Interface:} mantém a CLI responsiva às ações do usuário.
     \item \textbf{Módulo P2P:} envia e recebe chunks de arquivos diretamente com outros peers via TCP.
-    \item \textbf{Gerenciador de chunks:} controla quais partes de cada arquivo foram obtidas e quais ainda faltam. Antes de iniciar um download, consulta cada peer fonte com \texttt{CHUNK\_LIST\_REQUEST} para descobrir os chunks disponíveis em cada uma, e então coordena downloads paralelos distribuindo as requisições entre as múltiplas fontes. E se a conexão for interrompida retoma o download considerando os chunks que já foram baixados.
-    \item \textbf{Armazenamento local:} Arquivos de áudio, e quando solicitado segmenta o arquivo em chunks para propagar.
+    \item \textbf{Gerenciador de chunks:} controla quais partes de cada arquivo foram obtidas e quais ainda faltam. Antes de iniciar um download, consulta cada peer fonte com \texttt{CHUNK\_LIST\_REQUEST} para descobrir os chunks disponíveis em cada um e, então, coordena downloads paralelos distribuindo as requisições entre as múltiplas fontes. Se a conexão for interrompida, retoma o download considerando os chunks que já foram baixados.
+    \item \textbf{Armazenamento local:} guarda os arquivos de áudio e, quando solicitado, segmenta o arquivo em chunks para propagá-lo.
 \end{itemize}
 
 Essas responsabilidades se distribuem em quatro atividades concorrentes, mostradas na Figura~\ref{fig:peer-threads} junto dos módulos que cada uma utiliza.
@@ -217,7 +217,7 @@ Simular múltiplos peers na mesma máquina utilizando processos / terminais dife
 Derrubar tracker e peers deliberadamente para verificar:
 \begin{itemize}
     \item Se os arquivos continuam acessíveis por meio de outros peers que possuem os chunks.
-    \item Se a sincronização entre tracker se mantém após a saída de um nó da rede de trackers.
+    \item Se a sincronização entre trackers se mantém após a saída de um nó da rede de trackers.
     \item Se peers órfãos reconectam corretamente ao tracker de backup após falha do tracker principal.
 \end{itemize}
 
@@ -255,17 +255,19 @@ O uso de middleware se justifica principalmente pela \textbf{heterogeneidade} do
 
 \subsection{Síncrona ou Assíncrona?}
 
-A escolha entre comunicação síncrona e assíncrona vai depender da operação:
+A escolha entre comunicação síncrona e assíncrona vai depender da operação.
 
 \begin{itemize}
     \item \textbf{Síncrona}: operações em que o peer precisa da resposta para continuar:
     \begin{itemize}
         \item busca de música (\texttt{SEARCH\_FILE})
         \item registro de arquivo (\texttt{REGISTER\_FILE})
-    \end{itemize}. 
-    O peer aguarda a resposta do tracker antes de prosseguir.
+    \end{itemize}
+    Nessas operações, o peer aguarda a resposta do tracker antes de prosseguir.
     
-    \item \textbf{Assíncrona}: sincronização entre trackers via flooding sobre TCP. O tracker que atualizou seu índice não aguarda confirmação dos demais: dispara o \texttt{SYNC\_TABLE} para cada tracker conhecido em threads paralelas e continua operando. Isso evita que a indisponibilidade temporária de um tracker bloqueie os demais. A convergência é garantida pela reconciliação \textit{anti-entropy} periódica entre trackers (Seção~\ref{sec:rep-protocolo}).
+    \item \textbf{Assíncrona}: sincronização entre trackers via flooding sobre TCP. O tracker que atualizou seu índice não aguarda confirmação dos demais. Ele dispara o \texttt{SYNC\_TABLE} para cada tracker conhecido em threads paralelas e continua operando, evitando que a indisponibilidade temporária de um tracker bloqueie os demais.
+    
+    A convergência é garantida pela reconciliação \textit{anti-entropy} periódica entre trackers (Seção~\ref{sec:rep-protocolo}).
 \end{itemize}
 
 \subsection{Protocolos de Transporte}
@@ -582,10 +584,10 @@ O campo \texttt{ttl} em \texttt{SEARCH\_FILE} é decrementado a cada
 \texttt{SEARCH\_FORWARD} entre trackers, evitando que uma busca percorra a rede indefinidamente. O valor inicial recomendado é 3, suficiente para a topologia de poucos trackers do projeto.
 
 \subsubsection*{Transferência de chunks}
-A resposta \texttt{CHUNK\_DATA} é enviada na mesma conexão TCP da requisição: primeiro o cabeçalho JSON (\texttt{CHUNK\_DATA\_HEADER}, mostrado acima) com o campo \texttt{payload\_bytes} indicando o tamanho, seguido imediatamente pelo payload binário do chunk em si. Esse formato evita o overhead de codificar dados binários (já comprimidos como áudio) em JSON. Antes de iniciar a transferência, o peer cliente envia \texttt{CHUNK\_LIST\_REQUEST} a cada fonte para descobrir quais chunks específicos cada uma possui, isso permite paralelizar o download entre fontes que tenham chunks complementares.
+A resposta \texttt{CHUNK\_DATA} é enviada na mesma conexão TCP da requisição. Primeiro o cabeçalho JSON (\texttt{CHUNK\_DATA\_HEADER}, mostrado acima) com o campo \texttt{payload\_bytes} indicando o tamanho, seguido imediatamente pelo payload binário do chunk em si. Esse formato evita o overhead de codificar dados binários (já comprimidos como áudio) em JSON. Antes de iniciar a transferência, o peer cliente envia \texttt{CHUNK\_LIST\_REQUEST} a cada fonte para descobrir quais chunks específicos cada uma possui, isso permite paralelizar o download entre fontes que tenham chunks complementares.
 
 \subsubsection*{Redundância intencional entre \texttt{PEER\_LEAVE\_FILE} e \texttt{SEED\_REPORT}}
-Em estado estacionário, o \texttt{SEED\_REPORT} periódico já mantém o índice consistente: hashes ausentes no relatório acabam virando tombstones. O \texttt{PEER\_LEAVE\_FILE} é mantido como caminho de \textit{resposta imediata}: quando o usuário remove uma música, faz sentido o tracker propagar a remoção em segundos em vez de aguardar até três minutos pelo próximo \texttt{SEED\_REPORT}.
+Em estado estacionário, o \texttt{SEED\_REPORT} periódico já mantém o índice consistente, dado que hashes ausentes no relatório acabam virando tombstones. O \texttt{PEER\_LEAVE\_FILE} é mantido como caminho de \textit{resposta imediata}: quando o usuário remove uma música, faz sentido o tracker propagar a remoção em segundos em vez de aguardar até três minutos pelo próximo \texttt{SEED\_REPORT}.
 
 \subsubsection*{Sinalização de erro}
 A mensagem genérica \texttt{ERROR} é usada como resposta negativa a qualquer requisição que não possa ser atendida, por exemplo, um \texttt{CHUNK\_REQUEST} para um chunk que o peer fonte já removeu, ou um \texttt{REGISTER\_FILE} com hash inválido. Os campos \texttt{ref\_type} e \texttt{ref\_id} permitem ao remetente correlacionar o erro com a requisição original.
@@ -671,7 +673,7 @@ Tanenbaum, no Cap. 6.1, estabelece que um \textit{true identifier} satisfaz trê
 Cada nó da rede precisa de um identificador único para que o tracker saiba quem possui quais arquivos e para que peers se conectem diretamente entre si durante a transferência.
     
 \subsubsection*{Arquivos de áudio}
-As músicas precisam ser identificadas de maneira única e independente de nome, dois arquivos com o mesmo nome mas conteúdo diferentes são entidades diferentes.
+As músicas precisam ser identificadas de maneira única e independente de nome, pois dois arquivos com o mesmo nome, mas conteúdo diferente, são entidades diferentes.
     
 \subsubsection*{Trackers}
 Precisam se identificar entre si para controlar a origem das mensagens \texttt{SYNC\_TABLE} e evitar processamento de atualizações duplicadas.
@@ -760,9 +762,9 @@ A seguir analisamos cada aspecto para o PeerSpot.
 Sim, e em ambos os componentes.
 
 \subsubsection*{No tracker}
-O tracker precisa atender múltiplos peers simultaneamente: receber registros de upload, responder buscas e processar mensagens de sincronização vindas de outros trackers. Um modelo single-threaded bloquearia todas as operações enquanto uma requisição estivesse sendo processada. 
+O tracker precisa atender múltiplos peers simultaneamente, recebendo registros de upload, respondendo buscas e processando mensagens de sincronização vindas de outros trackers. Um modelo single-threaded bloquearia todas as operações enquanto uma requisição estivesse sendo processada.
 
-A solução é um servidor multithread com pool de threads, onde cada requisição recebida é despachada para uma thread do pool roda em uma thread dedicada: um servidor TCP \texttt{accept()} ininterrupto aguarda conexões dos demais trackers e despacha cada uma para uma thread filha, em paralelo com o atendimento de requisições REST dos peers locais.
+Por isso, adotamos um servidor multithread com pool de threads, no qual cada requisição recebida é despachada para uma thread dedicada. Um servidor TCP com \texttt{accept()} ininterrupto aguarda conexões dos demais trackers e despacha cada uma para uma thread filha, em paralelo com o atendimento de requisições REST dos peers locais.
 
 \subsubsection*{Exclusão mútua local entre as threads do tracker}
 Como várias threads do tracker podem tocar as mesmas tabelas de índice em memória ao mesmo tempo (ex: uma atendendo um \texttt{REGISTER\_FILE} de um peer local enquanto outra aplica um \texttt{SYNC\_TABLE} recebido de outro tracker), o acesso a essas estruturas é protegido por \textbf{exclusão mútua local}, com um \texttt{threading.Lock()} padrão da linguagem. 
@@ -795,7 +797,7 @@ Faria sentido em um cenário de implantação real. A ideia seria usar container
 Em vez de abstrair as diferenças entre os sistemas, o container simplesmente as elimina, já que cada peer roda com o mesmo ambiente empacotado.
 
 \subsubsection*{Em implantação real}
-Em um cenário de implantação, os trackers poderiam rodar em máquinas virtuais ou containers em provedores de nuvem, permitindo escalar o número de trackers conforme a demanda e recriar instâncias automaticamente em caso de falha. Entretanto, dado o escopo do nosso projeto, tamanho trabalho não é viável por questões de tempo de implementação.
+Em um cenário de implantação, os trackers poderiam rodar em máquinas virtuais ou containers em provedores de nuvem, permitindo escalar o número de trackers conforme a demanda e recriar instâncias automaticamente em caso de falha. Entretanto, dado o escopo do nosso projeto, um esforço dessa magnitude não é viável por questões de tempo de implementação.
 
 \subsubsection*{Durante o desenvolvimento e testes}
 Para o escopo deste projeto, optamos por uma abordagem mais simples e direta: simular múltiplos peers e trackers como \textbf{processos independentes em terminais separados} na mesma máquina, distinguidos por porta (\texttt{ip:porta}). Cada terminal executa um processo Python, um peer ou um tracker, com seu próprio arquivo de configuração. Como o modelo de endereçamento da rede já é baseado em \texttt{ip:porta}, rodar todos os nós em \texttt{127.0.0.1} com portas distintas reproduz fielmente a topologia distribuída sem nenhuma camada de virtualização.
@@ -810,21 +812,21 @@ A seguir, descrevemos o que replicamos, sob qual modelo de consistência e por q
 
 \subsection{O que é replicado}\label{sec:rep-oque}
 
-A replicação acontece sobre os indíces e arquivos.
+A replicação acontece sobre os índices e os arquivos.
 
 \subsubsection*{Índice (metadados)} 
 Todos os trackers formam uma rede totalmente conectada e mantêm cópias completas do índice global (\textit{full replication}). 
 
-Cada tracker é uma réplica integral. A motivação é tolerância a falhas: a queda de um tracker não derruba a busca e desempenho de leitura (toda busca é respondida localmente).
+Cada tracker é uma réplica integral. A motivação por trás disso é a tolerância a falhas, já que a queda de um tracker não derruba a busca, além do ganho de desempenho de leitura, pois toda busca é respondida localmente.
 
 \subsubsection*{Arquivos (conteúdo)} 
-O áudio é replicado naturalmente entre os peers: quando um peer termina um download, ele se registra como nova fonte do arquivo. Cada cópia baixada aumenta a disponibilidade e a banda total;
+O áudio é replicado naturalmente entre os peers, pois, quando um peer termina um download, ele se registra como nova fonte do arquivo. Cada cópia baixada aumenta a disponibilidade e a banda total.
 
 Como os arquivos são endereçados por conteúdo (hash SHA-256), eles são imutáveis, ou seja, duas réplicas de um mesmo hash são idênticas e nunca entram em conflito. Por isso, todo o problema de consistência recai apenas sobre o índice.
 
 \subsection{Modelo de consistência}\label{sec:modelo_consistencia}
 
-O índice adota \textbf{consistência eventual}: aceitamos pequenas inconsistências transitórias (no máximo alguns minutos) em troca de uma implementação simples e sempre disponível. Na ausência de novas atualizações, todas as réplicas convergem para o mesmo estado. 
+O índice adota \textbf{consistência eventual}, ou seja, aceitamos pequenas inconsistências transitórias (no máximo alguns minutos) em troca de uma implementação simples e sempre disponível. Na ausência de novas atualizações, todas as réplicas convergem para o mesmo estado.
 
 A consistência forte foi descartada porque exigiria coordenação síncrona entre trackers a cada escrita, contrariando os objetivos de disponibilidade e simplicidade. No pior caso, uma busca retorna um peer que acabou de sair, e o cliente apenas tenta a próxima fonte.
 
@@ -928,7 +930,7 @@ Ao iniciar, o tracker envia uma mensagem \texttt{TRACKER\_REJOIN} ao \textit{boo
     \label{fig:reintegracao}
 \end{figure}
 
-O critério de balanceamento é simples: cada tracker ativo divide seu número atual de peers pelo número total de trackers na rede (incluindo o reintegrado) e cede o excedente. Isso distribui a carga de forma aproximadamente uniforme sem necessidade de coordenação centralizada.
+O critério de balanceamento é direto. Cada tracker ativo divide seu número atual de peers pelo número total de trackers na rede (incluindo o reintegrado) e cede o excedente, o que distribui a carga de forma aproximadamente uniforme sem necessidade de coordenação centralizada.
 
 \subsubsection*{Sobre a consistência do balanceamento}
 Como cada tracker ativo calcula sua cessão de forma independente, há risco de \textit{sobrecessão}, todos os trackers cederem peers ao mesmo tempo e o tracker reintegrado acabar com mais peers que os demais. Esse desbalanceamento transitório é aceitável: na próxima rodada de \texttt{SEED\_REPORT}, cada tracker recalcula seu fator de carga e, se algum estiver substancialmente abaixo da média, novos \texttt{REASSIGN\_TRACKER} são emitidos no sentido inverso. O sistema converge para um balanceamento aproximadamente uniforme sem necessidade de coordenação atômica entre os trackers.
@@ -938,7 +940,7 @@ A lista de trackers que cada peer mantém localmente é estática no código apr
 
 \subsection{Disponibilidade ou Confiabilidade?}\label{sec:disp_conf}
 
-Entre disponibilidade (estar pronto para uso a qualquer instante) e confiabilidade (operar continuamente, sem falhas, por longos períodos), o PeerSpot prioriza a \textbf{disponibilidade}. A razão vem do próprio domínio: em um serviço de compartilhamento de música, é melhor que uma busca responda rápido com um resultado talvez desatualizado (por exemplo, um peer que acabou de sair) do que travar a resposta esperando ter certeza absoluta.
+Entre disponibilidade (estar pronto para uso a qualquer instante) e confiabilidade (operar continuamente, sem falhas, por longos períodos), o PeerSpot prioriza a \textbf{disponibilidade}. Essa decisão vem do próprio domínio, pois, em um serviço de compartilhamento de música, é melhor que uma busca responda rápido com um resultado talvez desatualizado (por exemplo, um peer que acabou de sair) do que travar a resposta esperando ter certeza absoluta.
 
 Essa preferência é coerente com as escolhas que já fizemos: o índice é replicado em todos os trackers (qualquer um responde), o peer troca na hora para um tracker de backup quando o principal cai (Seção~\ref{sec:fallback_peer}) e o sistema opera sob consistência eventual (Seção~\ref{sec:modelo_consistencia}). Em troca, abrimos mão da confiabilidade estrita, aceitando pequenas inconsistências transitórias em favor da disponibilidade e da simplicidade.
 
