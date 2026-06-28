@@ -60,10 +60,10 @@
   \vspace{1.5cm}
   {\Large Alunos:}\\
   \begin{spacing}{1.2}
-    Bruno Hideo Ioneda --- 15573619\\
-    Guilherme Samuel Lemos Segura --- 15575611\\
-    Higor Ranel Viani Lopes --- 15552946\\
-    João de Melo Fantini --- 15462550\\
+    Bruno Hideo Ioneda - 15573619\\
+    Guilherme Samuel Lemos Segura - 15575611\\
+    Higor Ranel Viani Lopes - 15552946\\
+    João de Melo Fantini - 15462550\\
   \end{spacing}
   \vfill
   {\Large São Paulo, março de 2026}
@@ -109,7 +109,6 @@ Como nosso sistema é voltado para compartilhamento de música, em que o usuári
 \subsection{Por que não P2P estruturado com DHT?}\label{sec:dht}
 Outra opção avaliada foi o P2P estruturado com DHT, que oferece buscas rápidas sem componentes centrais. O gargalo da arquitetura seria o trabalho extra para manter as tabelas de roteamento e redistribuir as chaves sempre que um nó entra ou sai da rede. 
 
-Tanenbaum cita no Cap. 2.4.4 uma variante do BitTorrent que troca os trackers por uma DHT auxiliar, mas descartamos essa ideia pelo mesmo motivo da DHT pura, já que a complexidade adicional não compensa para o escopo do trabalho.
 
 \subsection{Por que P2P com super peers (trackers)?}
 
@@ -120,20 +119,20 @@ Os trackers mantêm um \textbf{índice replicado} entre vários nós (sem ponto 
 \begin{itemize}
     \item \textbf{Escalabilidade:} a carga de armazenamento e transferência é distribuída entre os peers. Adicionar usuários aumenta a capacidade da rede.
     \item \textbf{Tolerância a falhas:} como os trackers sincronizam seus índices entre si por \textit{flooding} sobre TCP, a queda de um tracker não torna os arquivos inacessíveis.
-    \item \textbf{Eficiência de busca:} weak peers não precisam manter tabelas de roteamento complexas, delegam a busca ao tracker ao qual estão conectados.
+    \item \textbf{Eficiência de busca:} weak peers não precisam manter tabelas de roteamento complexas, pois delegam a busca ao tracker ao qual estão conectados.
     \item \textbf{Transparência de localização}: peers acessam arquivos por nome legível ou hash, sem saber qual peer físico vai servir a transferência.
 \end{itemize}
 
 \subsection{Componentes e Responsabilidades}\label{sec:componentes}
 
-Definida a arquitetura, a seguir descrevemos os dois tipos de componente e como o conjunto de trackers se organiza.
+Definida a arquitetura, a seguir iremos descrever os dois tipos de componente e como o conjunto de trackers se organiza.
 
 \paragraph{Peer}
 \begin{itemize}
     \item Nó básico da rede.
     \item Armazena chunks de arquivos de áudio localmente.
     \item Mantém uma conexão duradoura com seu tracker.
-    \item Ao fazer upload de uma música, notifica o tracker com \texttt{nome + hash}.
+    \item Ao fazer upload de uma música, notifica o tracker com \texttt{metadados}.
     \item Para baixar, consulta o tracker, recebe a lista de peers que possuem os chunks e realiza a transferência diretamente via TCP.
 \end{itemize}
 
@@ -141,7 +140,7 @@ Definida a arquitetura, a seguir descrevemos os dois tipos de componente e como 
 \begin{itemize}
     \item Agrega um cluster de peers comuns. Mantém cinco estruturas de índice em memória:
     \begin{itemize}
-        \item \texttt{nome\_da\_musica} $\rightarrow$ \texttt{conjunto de hashes} (homônimos são suportados)
+        \item \texttt{nome\_da\_musica} $\rightarrow$ \texttt{conjunto de hashes} (permitimos músicas com o mesmo nome)
         \item \texttt{hash} $\rightarrow$ \texttt{metadados} (\texttt{nome}, \texttt{tamanho}, \texttt{n\_chunks})
         \item \texttt{hash} $\rightarrow$ \texttt{lista de peers que possuem o arquivo}
         \item \texttt{nome\_peer} $\rightarrow$ \texttt{(ip, porta, last\_seed\_ts)}
@@ -153,8 +152,8 @@ Definida a arquitetura, a seguir descrevemos os dois tipos de componente e como 
 
 \paragraph{Organização dos trackers}
 \begin{itemize}
-    \item Os trackers formam uma rede totalmente conectada, onde cada tracker mantém uma lista de todos os outros trackers ativos.
-    \item  Não há hierarquia entre eles, todos são equivalentes e mantêm cópias sincronizadas do índice global.
+    \item Os trackers formam uma rede totalmente conectada, em que cada tracker mantém uma lista de todos os outros trackers ativos.
+    \item  Não há hierarquia entre eles: todos são equivalentes e mantêm cópias sincronizadas do índice global.
 \end{itemize}
 
 % ============================================================
@@ -169,9 +168,9 @@ Adota \textbf{arquitetura em camadas}:
 
 \begin{itemize}
     \item \textbf{Camada de API REST:} recebe requisições dos peers (\texttt{REGISTER\_FILE}, \texttt{SEARCH\_FILE}) e dos demais trackers em caso de roteamento.
-    \item \textbf{Camada de lógica de negócio:} processa autenticação, gerenciamento de playlists, lookup nas tabelas de índice e roteamento de buscas.
+    \item \textbf{Camada de lógica de negócio:} gerenciamento de playlists, lookup nas tabelas de índice e roteamento de buscas.
     \item \textbf{Camada de persistência:} banco de dados relacional para dados duráveis (usuários, playlists). As tabelas de índice (como \texttt{nome→hash} e \texttt{hash→peers}) são mantidas em memória, pois mudam com frequência e devem ser reconstruídas a partir dos peers ativos após uma reinicialização.
-    \item \textbf{Módulo de sincronização:} responsável por enviar e receber mensagens \texttt{SYNC\_TABLE} via TCP unicast (uma conexão paralela para cada tracker conhecido) para manter os índices sincronizados entre todos os trackers, e por gerenciar a entrada/saída de trackers através de \texttt{TRACKER\_REJOIN}, \texttt{FULL\_SYNC} e \texttt{TRACKER\_ANNOUNCE}.
+    \item \textbf{Módulo de sincronização:} responsável por enviar e receber mensagens \texttt{SYNC\_TABLE} via TCP unicast (uma conexão paralela para cada tracker conhecido) para manter os índices sincronizados entre todos os trackers, por reconciliar divergências em segundo plano via \texttt{SYNC\_DIGEST}/\texttt{SYNC\_PULL}, e por gerenciar a entrada/saída de trackers através de \texttt{TRACKER\_REJOIN} e \texttt{TRACKER\_ANNOUNCE}.
 \end{itemize}
 
 A Figura~\ref{fig:tracker-camadas} resume essa organização em camadas dentro do processo do tracker.
@@ -179,7 +178,7 @@ A Figura~\ref{fig:tracker-camadas} resume essa organização em camadas dentro d
 \begin{figure}[H]
     \centering
     \includegraphics[width=\linewidth]{b1-tracker-camadas.png}
-    \caption{Arquitetura em camadas do tracker (super peer), executando como processo único.}
+    \caption{Arquitetura em camadas do tracker (super peer), de forma a executar como processo único.}
     \label{fig:tracker-camadas}
 \end{figure}
 
@@ -190,7 +189,7 @@ Adota \textbf{arquitetura P2P}: não há distinção de papel fixo, o mesmo nó 
 \begin{itemize}
     \item \textbf{Interface:} mantém a CLI responsiva às ações do usuário.
     \item \textbf{Módulo P2P:} envia e recebe chunks de arquivos diretamente com outros peers via TCP.
-    \item \textbf{Gerenciador de chunks:} controla quais partes de cada arquivo foram obtidas e quais ainda faltam. Antes de iniciar um download, consulta cada peer fonte com \texttt{CHUNK\_LIST\_REQUEST} para descobrir os chunks disponíveis em cada um e, então, coordena downloads paralelos distribuindo as requisições entre as múltiplas fontes. Se a conexão for interrompida, retoma o download considerando os chunks que já foram baixados.
+    \item \textbf{Gerenciador de chunks:} controla quais partes de cada arquivo foram obtidas e quais ainda faltam. Antes de iniciar um download, consulta cada peer fonte com \texttt{CHUNK\_LIST\_REQUEST} para descobrir os chunks disponíveis em cada um e, então, coordena downloads paralelos que distribuem as requisições entre as múltiplas fontes. Se a conexão for interrompida, retoma o download considerando os chunks que já foram baixados.
     \item \textbf{Armazenamento local:} guarda os arquivos de áudio e, quando solicitado, segmenta o arquivo em chunks para propagá-lo.
 \end{itemize}
 
@@ -210,7 +209,7 @@ Essas responsabilidades se distribuem em quatro atividades concorrentes, mostrad
 A seguir, definimos como o sistema será testado, considerando o escopo do projeto.
 
 \subsection{Testes Funcionais Locais}
-Simular múltiplos peers na mesma máquina utilizando processos / terminais diferentes. O objetivo é validar as funcionalidades básicas, upload, registro no tracker, busca, download e reprodução, em um ambiente controlado, antes de introduzir variáveis de rede real.
+Simular múltiplos peers na mesma máquina utilizando processos / terminais diferentes. O objetivo é validar as funcionalidades básicas (upload, registro no tracker, busca, download e reprodução) em um ambiente controlado, antes de introduzir variáveis de rede real.
 
 
 \subsection{Testes de Tolerância a Falhas}
@@ -225,13 +224,13 @@ Derrubar tracker e peers deliberadamente para verificar:
 \section{Middleware}\label{sec:middleware}
 % ============================================================
 
-O Tanenbaum (Cap.~2.2) define \textit{middleware} como a camada que abstrai a heterogeneidade da rede, permitindo que componentes distribuídos se comuniquem sem conhecer os detalhes uns dos outros. No PeerSpot, o middleware se manifesta entre os peers e entre um peer e seu tracker correspondente.
+Tanenbaum (Cap.~2.2) define \textit{middleware} como a camada que abstrai a heterogeneidade da rede, de forma a permitir que componentes distribuídos se comuniquem sem conhecer os detalhes uns dos outros. No PeerSpot, o middleware se apresenta entre os peers e entre um peer e seu tracker correspondente.
 
 \subsection{Entre peer e tracker}
-Um framework de comunicação padronizado, REST sobre HTTP, abstrai os detalhes de rede e permite que peers em plataformas diferentes (Windows, Linux, macOS) se comuniquem com o tracker de forma uniforme. Bibliotecas como \texttt{Flask} ou \texttt{FastAPI} (Python) atuam como middleware nessa camada.
+Um framework de comunicação padronizado, REST sobre HTTP, abstrai os detalhes de rede e permite que peers em plataformas diferentes se comuniquem com o tracker de forma uniforme. Como middleware nessa camada, foi utilizado o FastAPI (Python), que opera em conjunto com o servidor Uvicorn.
 
 \subsection{Entre peers}
-O protocolo de troca de chunks sobre TCP padroniza como dois peers negociam quais partes de um arquivo um tem e o outro precisa. A biblioteca padrão de \textit{sockets} POSIX (módulo \texttt{socket} do Python) combinada com \texttt{threading} atua como middleware aqui, isolando o módulo P2P dos detalhes de baixo nível da comunicação.
+O protocolo de troca de chunks sobre TCP padroniza como dois peers negociam quais partes de um arquivo um tem e o outro precisa. A biblioteca padrão de \textit{sockets} POSIX (módulo \texttt{socket} do Python) combinada com \texttt{threading} atua como middleware aqui, de modo a isolar o módulo P2P dos detalhes de baixo nível da comunicação.
 
 O uso de middleware se justifica principalmente pela \textbf{heterogeneidade} do sistema: como os peers podem rodar em sistemas operacionais diferentes, o middleware é o que resolve o problema de fazer todos conversarem entre si. Além disso, ao adotar REST/JSON e sockets POSIX padrão, usamos formatos e protocolos abertos e padronizados, o que permite que implementações diferentes do peer ou do tracker consigam funcionar juntas sem problema.
 
@@ -265,9 +264,9 @@ A escolha entre comunicação síncrona e assíncrona vai depender da operação
     \end{itemize}
     Nessas operações, o peer aguarda a resposta do tracker antes de prosseguir.
     
-    \item \textbf{Assíncrona}: sincronização entre trackers via flooding sobre TCP. O tracker que atualizou seu índice não aguarda confirmação dos demais. Ele dispara o \texttt{SYNC\_TABLE} para cada tracker conhecido em threads paralelas e continua operando, evitando que a indisponibilidade temporária de um tracker bloqueie os demais.
+    \item \textbf{Assíncrona}: sincronização entre trackers via flooding sobre TCP. O tracker que atualizou seu índice não aguarda confirmação dos demais. Ele dispara o \texttt{SYNC\_TABLE} para cada tracker conhecido em threads paralelas e continua operando, de modo a evitar que a indisponibilidade temporária de um tracker bloqueie os demais.
     
-    A convergência é garantida pela reconciliação \textit{anti-entropy} periódica entre trackers (Seção~\ref{sec:rep-protocolo}).
+    A convergência é garantida pela reconciliação \textit{anti-entropy} entre trackers, baseada em \textit{digest} de versões periódico (Seção~\ref{sec:rep-protocolo}).
 \end{itemize}
 
 \subsection{Protocolos de Transporte}
@@ -292,7 +291,7 @@ Peer $\leftrightarrow$ Peer (transferência de chunks) & TCP direto & Garante en
 \end{tabularx}
 \end{center}
 
-\subsection{Tipo de Conexões}
+\subsection{Tipos de Conexões}
 
 \begin{itemize}
     \item \textbf{Conexões duradouras:} entre peer e seu tracker. O peer mantém a conexão aberta para enviar notificações (ex.: upload de músicas).
@@ -469,13 +468,21 @@ PEER_LEAVE_FILE = {
 # destinatario responder a buscas) e a flag 'ativo' que distingue
 # adicao de remocao (tombstone).
 # Entries de registro (ativo: True) carregam tambem os metadados do
-# arquivo (nome, tamanho, n_chunks), pelos mesmos motivos do FULL_SYNC:
-# sem eles, um tracker que conhece o hash apenas via SYNC_TABLE nao
-# consegue responder buscas por nome nem aceitar o re-registro
-# pos-download de um peer local. Tombstones (ativo: False) os omitem.
+# arquivo (nome, tamanho, n_chunks) por uma razao simples: sem eles, um
+# tracker que conhece o hash apenas via SYNC_TABLE nao consegue responder
+# buscas por nome nem aceitar o re-registro pos-download de um peer local.
+# Tombstones (ativo: False) os omitem.
+#
+# O par (origem, seq) identifica a escrita: 'origem' e o tracker que a
+# produziu e 'seq' e o seu contador monotonico. O receptor guarda esse
+# par junto de cada entrada e mantem o maior seq visto por origem (um
+# vetor de versoes), usado para detectar deltas perdidos e dispara-los
+# de volta (ver SYNC_DIGEST / SYNC_PULL). O seq so DETECTA perda, o
+# desempate de conflito continua sendo LWW por timestamp.
 SYNC_TABLE = {
     "type":      "SYNC_TABLE",
     "origem":    "tracker_id",
+    "seq":       "int",             # contador monotonico do tracker de origem
     "timestamp": 1743550800.123,    # Unix timestamp (NTP-sincronizado)
     "entries": [
         {
@@ -491,33 +498,39 @@ SYNC_TABLE = {
     ]
 }
 
-# Sincronizacao completa do indice (tracker -> tracker)
-# Enviada em dois casos: (a) em resposta a TRACKER_REJOIN e (b)
-# periodicamente, como reconciliacao anti-entropy entre trackers. Carrega o
-# estado completo das tabelas e a lista atual de trackers ativos. Cada peer
-# leva 'origem' (tracker que produziu a escrita), alem de 'ativo'/'timestamp',
-# para o receptor aplicar LWW de forma deterministica (mesmo desempate do
-# SYNC_TABLE).
-FULL_SYNC = {
-    "type":   "FULL_SYNC",
-    "origem": "tracker_id",
-    "entries": [
-        {
-            "hash":      "sha256_hex",
-            "nome":      "string",
-            "tamanho":   "int_bytes",
-            "n_chunks":  "int",
-            "peers": [
-                {
-                    "nome_peer": "string", "ip": "string", "porta": "int",
-                    "ativo": "bool", "timestamp": "float",
-                    "origem": "tracker_id"   # tracker que produziu a escrita (desempate LWW)
-                }
-            ]
-        }
-    ],
-    "trackers_conhecidos": [
-        { "tracker_id": "string", "ip": "string", "porta": "int" }
+# Digest de versoes (tracker -> tracker, periodico)
+# Em vez de reenviar o estado completo, cada tracker anuncia so o seu
+# vetor de versoes: o maior seq que conhece de cada origem (inclusive o
+# proprio). O receptor compara componente a componente e, onde o emissor
+# estiver a frente, pede os deltas faltantes via SYNC_PULL. 
+# Cobre o ponto cego da deteccao inline: quando a ultima escrita de um 
+# tracker se perde e ele fica em silencio, nao ha
+# seq posterior para revelar a lacuna.
+SYNC_DIGEST = {
+    "type":    "SYNC_DIGEST",
+    "origem":  "tracker_id",
+    "versoes": { "tracker_id": "int" }   # maior seq conhecido por origem
+}
+
+# Pedido de deltas faltantes (tracker -> tracker)
+# Disparado pela deteccao inline (lacuna de seq num SYNC_TABLE), pela
+# comparacao de digests, ou pela reintegracao. Pede, para cada origem,
+# tudo o que o destinatario originou com seq acima de 'desde_seq'. Esse
+# 'desde_seq' e o visto[origem] capturado no instante da deteccao da
+# lacuna (fica pendente ate a resposta), nao o visto atual, que pode ja
+# ter avancado, pois escritas fora de ordem sao aplicadas na hora. Com
+# desde_seq=0 pede o estado inteiro daquela origem, e e assim que um
+# tracker reintegrado reconstroi o indice: um SYNC_PULL(desde_seq=0) por
+# origem conhecida. A resposta vem como uma ou mais mensagens SYNC_TABLE
+# (um evento por seq), na mesma conexao TCP do pedido e incluindo
+# tombstones (ativo=False), filtradas do estado atual do destinatario,
+# sem log historico, pois cada entrada ja carrega a (origem, seq,
+# timestamp) da escrita corrente e o LWW descarta no receptor o que
+# estiver velho.
+SYNC_PULL = {
+    "type":     "SYNC_PULL",
+    "faltando": [
+        { "origem": "tracker_id", "desde_seq": "int" }
     ]
 }
 
@@ -526,11 +539,24 @@ FULL_SYNC = {
 # =====================================================================
 
 # Novo tracker se apresentando ao bootstrap node (tracker -> tracker)
+# O bootstrap responde com TRACKER_LIST. O indice em
+# si o tracker que volta reconstroi sozinho, com SYNC_PULL(desde_seq=0)
+# de cada origem conhecida.
 TRACKER_REJOIN = {
     "type":       "TRACKER_REJOIN",
     "tracker_id": "string",
     "ip":         "string",
     "porta":      "int"
+}
+
+# Resposta do bootstrap ao TRACKER_REJOIN (tracker -> tracker)
+# Devolve apenas a lista atual de trackers ativos; nao carrega o indice,
+# que e reconstruido a parte via SYNC_PULL(desde_seq=0).
+TRACKER_LIST = {
+    "type": "TRACKER_LIST",
+    "trackers_conhecidos": [
+        { "tracker_id": "string", "ip": "string", "porta": "int" }
+    ]
 }
 
 # Anuncio de novo tracker aos demais (tracker -> tracker, flooding TCP)
@@ -573,24 +599,27 @@ ERROR = {
 
 \subsubsection*{Correlação de buscas}
 
-Os campos \texttt{query\_id} em \texttt{SEARCH\_FILE}, \texttt{SEARCH\_FORWARD} e \texttt{SEARCH\_RESULT} são UUIDs gerados pelo peer no momento da busca; permitem correlacionar requisição e resposta, possibilitando que o peer faça múltiplas buscas em paralelo sem confundir os resultados. O \texttt{SEARCH\_FORWARD} carrega ainda o \texttt{origem\_tracker} para que o tracker remoto envie a resposta diretamente ao tracker que originou o roteamento, sem refazer todo o caminho.
+Os campos \texttt{query\_id} em \texttt{SEARCH\_FILE}, \texttt{SEARCH\_FORWARD} e \texttt{SEARCH\_RESULT} são UUIDs gerados pelo peer no momento da busca e permitem correlacionar requisição e resposta, de forma a possibilitar que o peer faça múltiplas buscas em paralelo sem confundir os resultados. O \texttt{SEARCH\_FORWARD} carrega ainda o \texttt{origem\_tracker} para que o tracker remoto envie a resposta diretamente ao tracker que originou o roteamento, sem refazer todo o caminho.
 
 \subsubsection*{Sobre a utilidade do \texttt{SEARCH\_FORWARD} com índice replicado}
 
-Como o índice é integralmente replicado entre os trackers (Seção~\ref{sec:replicacao}), em estado estacionário toda busca é respondida localmente e o \texttt{SEARCH\_FORWARD} é dispensável. Ele permanece no protocolo como rede de segurança para a janela transitória de inconsistência: tracker recém-reintegrado ainda sem \texttt{FULL\_SYNC} completo, ou que perdeu um \texttt{SYNC\_TABLE} e ainda não foi reconciliado pelo \textit{anti-entropy}.
+Como o índice é integralmente replicado entre os trackers (Seção~\ref{sec:replicacao}), em estado estacionário toda busca é respondida localmente e o \texttt{SEARCH\_FORWARD} é dispensável. Ele permanece no protocolo como rede de segurança para a janela transitória de inconsistência: tracker recém-reintegrado que ainda não terminou de reconstruir o índice, ou que perdeu um \texttt{SYNC\_TABLE} e ainda não foi reconciliado pelo \textit{anti-entropy}.
 
 \subsubsection*{Limite de roteamento}
 O campo \texttt{ttl} em \texttt{SEARCH\_FILE} é decrementado a cada
-\texttt{SEARCH\_FORWARD} entre trackers, evitando que uma busca percorra a rede indefinidamente. O valor inicial recomendado é 3, suficiente para a topologia de poucos trackers do projeto.
+\texttt{SEARCH\_FORWARD} entre trackers, de forma a evitar que uma busca percorra a rede indefinidamente. O valor inicial recomendado é 3, suficiente para a topologia de poucos trackers do projeto.
 
 \subsubsection*{Transferência de chunks}
-A resposta \texttt{CHUNK\_DATA} é enviada na mesma conexão TCP da requisição. Primeiro o cabeçalho JSON (\texttt{CHUNK\_DATA\_HEADER}, mostrado acima) com o campo \texttt{payload\_bytes} indicando o tamanho, seguido imediatamente pelo payload binário do chunk em si. Esse formato evita o overhead de codificar dados binários (já comprimidos como áudio) em JSON. Antes de iniciar a transferência, o peer cliente envia \texttt{CHUNK\_LIST\_REQUEST} a cada fonte para descobrir quais chunks específicos cada uma possui, isso permite paralelizar o download entre fontes que tenham chunks complementares.
+A resposta \texttt{CHUNK\_DATA} é enviada na mesma conexão TCP da requisição. Primeiro o cabeçalho JSON (\texttt{CHUNK\_DATA\_HEADER}, mostrado acima) com o campo \texttt{payload\_bytes} que indica o tamanho, seguido imediatamente pelo payload binário do chunk em si. Esse formato evita o overhead de codificar dados binários (já comprimidos como áudio) em JSON. Antes de iniciar a transferência, o peer cliente envia \texttt{CHUNK\_LIST\_REQUEST} a cada fonte para descobrir quais chunks específicos cada uma possui. Isso permite paralelizar o download entre fontes que tenham chunks complementares.
 
 \subsubsection*{Redundância intencional entre \texttt{PEER\_LEAVE\_FILE} e \texttt{SEED\_REPORT}}
 Em estado estacionário, o \texttt{SEED\_REPORT} periódico já mantém o índice consistente, dado que hashes ausentes no relatório acabam virando tombstones. O \texttt{PEER\_LEAVE\_FILE} é mantido como caminho de \textit{resposta imediata}: quando o usuário remove uma música, faz sentido o tracker propagar a remoção em segundos em vez de aguardar até três minutos pelo próximo \texttt{SEED\_REPORT}.
 
 \subsubsection*{Sinalização de erro}
 A mensagem genérica \texttt{ERROR} é usada como resposta negativa a qualquer requisição que não possa ser atendida, por exemplo, um \texttt{CHUNK\_REQUEST} para um chunk que o peer fonte já removeu, ou um \texttt{REGISTER\_FILE} com hash inválido. Os campos \texttt{ref\_type} e \texttt{ref\_id} permitem ao remetente correlacionar o erro com a requisição original.
+
+\subsubsection*{Números de sequência e reconciliação entre trackers}
+Cada escrita que um tracker origina leva um par \texttt{(origem, seq)}, em que \texttt{seq} é um contador monotônico por tracker. Esse par viaja no \texttt{SYNC\_TABLE} e permite detectar deltas perdidos. O mecanismo completo (vetor de versões, \texttt{SYNC\_DIGEST} periódico e reparo direcionado via \texttt{SYNC\_PULL}) está na Seção~\ref{sec:rep-protocolo}. Vale frisar que o \texttt{seq} apenas \textit{detecta} perda: quem resolve o conflito continua sendo o LWW.
 
 \subsection{Fluxos Principais}\label{sec:fluxos}
 
@@ -600,7 +629,7 @@ Definidos os tipos de mensagem, descrevemos abaixo os fluxos centrais do sistema
 \begin{enumerate}
     \item Peer estabelece conexão TCP duradoura com seu tracker.
     \item Peer envia \texttt{PEER\_HELLO(nome\_peer, ip, porta)} para se registrar como presente.
-    \item Tracker insere o peer em sua tabela \texttt{nome\_peer $\rightarrow$ (ip, porta, last\_seed\_ts)}; nenhum arquivo é registrado aqui.
+    \item Tracker insere o peer em sua tabela \texttt{nome\_peer $\rightarrow$ (ip, porta, last\_seed\_ts)}. Nenhum arquivo é registrado aqui.
 \end{enumerate}
 
 \subsubsection*{Upload de música}
@@ -617,11 +646,11 @@ Definidos os tipos de mensagem, descrevemos abaixo os fluxos centrais do sistema
 \begin{enumerate}
     \item Peer envia \texttt{SEARCH\_FILE(query\_id, query, ttl=3)} ao seu tracker via REST.
     \item Tracker consulta \texttt{nome→hashes} e, para cada hash, monta \texttt{hash→\{metadados, peers\}}.
-    \item Se nada encontrado e \texttt{ttl > 0}, encaminha \texttt{SEARCH\_FORWARD} aos demais trackers em paralelo (Seção~\ref{sec:rep-protocolo}); agrega as respostas recebidas.
+    \item Se nada encontrado e \texttt{ttl > 0}, encaminha \texttt{SEARCH\_FORWARD} aos demais trackers em paralelo e agrega as respostas recebidas (Seção~\ref{sec:rep-protocolo}).
     \item Tracker retorna \texttt{SEARCH\_RESULT(query\_id, resultados=[\{hash, nome, n\_chunks, peers[\{nome\_peer, ip, porta\}]\}])} ao peer.
-    \item Peer envia \texttt{CHUNK\_LIST\_REQUEST(hash)} a cada peer fonte; cada um responde com \texttt{CHUNK\_LIST(hash, chunks\_disponiveis)}.
-    \item Peer monta um plano de download paralelo, distribuindo os chunks entre as fontes disponíveis, e envia \texttt{CHUNK\_REQUEST(hash, chunk\_index)} para cada chunk. Cada fonte responde com \texttt{CHUNK\_DATA\_HEADER(payload\_bytes)} seguido do payload binário, na mesma conexão TCP.
-    \item Após completar o download e validar o SHA-256 do arquivo final, o peer envia \texttt{REGISTER\_FILE(nome\_peer, hash)} ao tracker (re-registro: \texttt{nome}/\texttt{tamanho}/\texttt{n\_chunks} são opcionais), passando a ser também fonte do arquivo.
+    \item Peer envia \texttt{CHUNK\_LIST\_REQUEST(hash)} a cada peer fonte, que responde com \texttt{CHUNK\_LIST(hash, chunks\_disponiveis)}.
+    \item Peer monta um plano de download paralelo, de maneira a distribuir os chunks entre as fontes disponíveis, e envia \texttt{CHUNK\_REQUEST(hash, chunk\_index)} para cada chunk. Cada fonte responde com \texttt{CHUNK\_DATA\_HEADER(payload\_bytes)} seguido do payload binário, na mesma conexão TCP.
+    \item Após completar o download e validar o SHA-256 do arquivo final, o peer envia \texttt{REGISTER\_FILE(nome\_peer, hash)} ao tracker (re-registro: \texttt{nome}/\texttt{tamanho}/\texttt{n\_chunks} são opcionais), de modo a se tornar também fonte do arquivo.
 \end{enumerate}
 
 O último passo do download faz de cada peer que conclui uma transferência uma nova fonte do arquivo.
@@ -631,7 +660,7 @@ O último passo do download faz de cada peer que conclui uma transferência uma 
     \item Peer envia \texttt{PEER\_LEAVE\_FILE(nome\_peer, hash)} ao seu tracker via REST (ou \texttt{PEER\_LEAVE} para sair da rede inteira).
     \item Tracker remove o peer da lista de fontes do hash e cria um \textit{tombstone} local com \textit{timestamp} atual.
     \item Tracker envia \texttt{SYNC\_TABLE(origem, timestamp, entries[\{hash, nome\_peer, ip, porta, ativo=False\}])} aos demais trackers em paralelo.
-    \item Cada tracker receptor aplica o \textit{tombstone} por LWW; o registro é retido por 10 minutos antes do descarte definitivo.
+    \item Cada tracker receptor aplica o \textit{tombstone} por LWW e o retém por 10 minutos antes do descarte definitivo.
 \end{enumerate}
 
 % ============================================================
@@ -687,7 +716,7 @@ O PeerSpot adota esquemas complementares, conforme a entidade:
 
 Peers são identificados por um \textbf{nome de usuário}, que deve ser único na rede. O tracker mantém uma tabela \texttt{nome\_peer $\rightarrow$ ip:porta} que mapeia cada peer ao seu endereço de rede atual. Como peers domésticos podem ter IPs dinâmicos, toda vez que o IP de um peer muda ele notifica seu tracker com uma mensagem \texttt{UPDATE\_IP}, que propaga a atualização aos demais trackers via flooding TCP. Dessa forma, o nome do peer permanece estável como identidade, enquanto o IP é tratado como endereço de contato mutável.
 
-O \texttt{nome\_peer} satisfaz as propriedades 1. e 2. de um \textit{true identifier}, mas viola estritamente a 3.: nada impede que um usuário desligue sua conta e outro mais tarde se cadastre com o mesmo nome. Para o escopo do projeto isso é aceitável, visto que não há reuso esperado em janelas de tempo curtas.
+O \texttt{nome\_peer} satisfaz as propriedades 1. e 2. de um \textit{true identifier}, mas viola estritamente a propriedade 3: nada impede que um usuário desligue sua conta e outro mais tarde se cadastre com o mesmo nome. Para o escopo do projeto isso é aceitável, visto que não há reuso esperado em janelas de tempo curtas.
 
 \subsubsection*{Nomes planos para arquivos}
 
@@ -697,7 +726,7 @@ Como é derivado do conteúdo, satisfaz integralmente as três propriedades de u
 
 \subsubsection*{Identificação dos trackers}
 
-Cada tracker recebe um \texttt{tracker\_id} único, atribuído administrativamente no momento da configuração da rede (ex.: \texttt{tracker-1}, \texttt{tracker-2}, ...). Esse identificador aparece no campo \texttt{origem} de toda mensagem \texttt{SYNC\_TABLE} e serve dois propósitos: evitar reprocessamento de mensagens recebidas como eco do próprio envio, e desempatar conflitos de \textit{Last Write Wins} com timestamps idênticos. Como o conjunto de trackers é gerenciado por configuração e não cresce dinamicamente em larga escala, a unicidade do \texttt{tracker\_id} é garantida operacionalmente.
+Cada tracker recebe um \texttt{tracker\_id} único, atribuído administrativamente no momento da configuração da rede (ex.: \texttt{tracker-1}, \texttt{tracker-2}, ...). Esse identificador aparece no campo \texttt{origem} de toda mensagem \texttt{SYNC\_TABLE} e serve a dois propósitos: evitar reprocessamento de mensagens recebidas como eco do próprio envio, e desempatar conflitos de \textit{Last Write Wins} com timestamps idênticos. Como o conjunto de trackers é gerenciado por configuração e não cresce dinamicamente em larga escala, a unicidade do \texttt{tracker\_id} é garantida operacionalmente.
 
 \subsubsection*{Nomes estruturados das músicas}
 
@@ -749,7 +778,11 @@ Se o tracker local não tem o hash (por uma corrida com a propagação do floodi
    REGISTER_FILE(nome_peer, hash)
 \end{lstlisting}
 
-Vale destacar duas decisões: a resposta de um \textit{forward} volta na mesma conexão TCP do encaminhamento, sem precisar abrir outra de volta; e o tracker que recebe um \texttt{SEARCH\_FORWARD} não reencaminha de novo, o que evita loops sem precisar de nenhuma tabela de roteamento extra.
+Vale destacar duas decisões:
+\begin{enumerate}
+    \item a resposta de um \textit{forward} volta na mesma conexão TCP do encaminhamento, sem precisar abrir outra de volta
+    \item o tracker que recebe um \texttt{SEARCH\_FORWARD} não reencaminha de novo, o que evita loops sem precisar de nenhuma tabela de roteamento extra
+\end{enumerate}
 
 % ============================================================
 \section{Processos}\label{sec:processos}
@@ -762,12 +795,12 @@ A seguir analisamos cada aspecto para o PeerSpot.
 Sim, e em ambos os componentes.
 
 \subsubsection*{No tracker}
-O tracker precisa atender múltiplos peers simultaneamente, recebendo registros de upload, respondendo buscas e processando mensagens de sincronização vindas de outros trackers. Um modelo single-threaded bloquearia todas as operações enquanto uma requisição estivesse sendo processada.
+O tracker precisa atender múltiplos peers simultaneamente, de forma a receber registros de upload, respondendo buscas e a processar mensagens de sincronização vindas de outros trackers. Um modelo single-threaded bloquearia todas as operações enquanto uma requisição estivesse sendo processada.
 
 Por isso, adotamos um servidor multithread com pool de threads, no qual cada requisição recebida é despachada para uma thread dedicada. Um servidor TCP com \texttt{accept()} ininterrupto aguarda conexões dos demais trackers e despacha cada uma para uma thread filha, em paralelo com o atendimento de requisições REST dos peers locais.
 
 \subsubsection*{Exclusão mútua local entre as threads do tracker}
-Como várias threads do tracker podem tocar as mesmas tabelas de índice em memória ao mesmo tempo (ex: uma atendendo um \texttt{REGISTER\_FILE} de um peer local enquanto outra aplica um \texttt{SYNC\_TABLE} recebido de outro tracker), o acesso a essas estruturas é protegido por \textbf{exclusão mútua local}, com um \texttt{threading.Lock()} padrão da linguagem. 
+Como várias threads do tracker podem tocar as mesmas tabelas de índice em memória ao mesmo tempo (ex: uma vem atender um \texttt{REGISTER\_FILE} de um peer local enquanto outra aplica um \texttt{SYNC\_TABLE} recebido de outro tracker), o acesso a essas estruturas é protegido por \textbf{exclusão mútua local}, com um \texttt{threading.Lock()} padrão da linguagem. 
 
 Trata-se de um problema de concorrência dentro de um processo em um único tracker, e não de exclusão mútua \textit{distribuída} entre trackers. A semântica comutativa das operações sobre o índice (somada ao LWW para remoções) dispensa qualquer coordenação de exclusão mútua entre os trackers.
 
@@ -782,13 +815,13 @@ No PeerSpot, consideramos o tracker como stateful e o peer como parcialmente sta
 
 O tracker é stateful: mantém em memória as tabelas \texttt{nome $\rightarrow$ hashes}, \texttt{hash $\rightarrow$ peers} e \texttt{nome\_peer $\rightarrow$ ip:porta}. O estado é essencial para a função do tracker, visto que nenhuma busca pode ser respondida sem ele.
 
-A implicação é que, ao reiniciar, o tracker começa com as tabelas vazias e reconstrói o índice via \texttt{FULL\_SYNC} com os demais trackers ativos.
+A implicação é que, ao reiniciar, o tracker começa com as tabelas vazias e reconstrói o índice puxando o estado das demais réplicas ativas, com um \texttt{SYNC\_PULL} desde 0 por origem (Seção~\ref{sec:reintegracao}).
 
 \subsubsection*{Peer}
 
 O peer é stateful no que diz respeito aos chunks armazenados localmente (persistidos em disco). A conexão duradoura com o tracker também é estado mantido em memória. 
 
-Porém, as conexões temporárias de transferência entre peers são tratadas de forma stateless, dado que cada \texttt{CHUNK\_REQUEST} é independente, e a conexão TCP pode ser encerrada e reestabelecida sem perda de progresso, pois o gerenciador de chunks controla quais índices já foram recebidos.
+Porém, as conexões temporárias de transferência entre peers são tratadas de forma stateless, dado que cada \texttt{CHUNK\_REQUEST} é independente, e a conexão TCP pode ser encerrada e restabelecida sem perda de progresso, pois o gerenciador de chunks controla quais índices já foram recebidos.
 
 \subsection{Faz sentido usar técnicas de virtualização?}
 
@@ -797,7 +830,7 @@ Faria sentido em um cenário de implantação real. A ideia seria usar container
 Em vez de abstrair as diferenças entre os sistemas, o container simplesmente as elimina, já que cada peer roda com o mesmo ambiente empacotado.
 
 \subsubsection*{Em implantação real}
-Em um cenário de implantação, os trackers poderiam rodar em máquinas virtuais ou containers em provedores de nuvem, permitindo escalar o número de trackers conforme a demanda e recriar instâncias automaticamente em caso de falha. Entretanto, dado o escopo do nosso projeto, um esforço dessa magnitude não é viável por questões de tempo de implementação.
+Em um cenário de implantação, os trackers poderiam rodar em máquinas virtuais ou containers em provedores de nuvem, de forma a permitir escalar o número de trackers conforme a demanda e recriar instâncias automaticamente em caso de falha. Entretanto, dado o escopo do nosso projeto, um esforço dessa magnitude não é viável por questões de tempo de implementação.
 
 \subsubsection*{Durante o desenvolvimento e testes}
 Para o escopo deste projeto, optamos por uma abordagem mais simples e direta: simular múltiplos peers e trackers como \textbf{processos independentes em terminais separados} na mesma máquina, distinguidos por porta (\texttt{ip:porta}). Cada terminal executa um processo Python, um peer ou um tracker, com seu próprio arquivo de configuração. Como o modelo de endereçamento da rede já é baseado em \texttt{ip:porta}, rodar todos os nós em \texttt{127.0.0.1} com portas distintas reproduz fielmente a topologia distribuída sem nenhuma camada de virtualização.
@@ -835,19 +868,19 @@ Essa escolha se apoia na semântica das operações. Registrar um peer como font
 Isso elimina conflitos no caso dominante. Já a remoção de um peer não é comutativa com a adição, e por isso é tratada com \textit{tombstones} e resolvida por \textit{Last Write Wins} (descritos adiante). Como consequência, a única exclusão mútua necessária é local, resolvida com locks de threading (Seção~\ref{sec:processos}).
 
 \subsubsection*{Relógio real com NTP}
-Para ordenar remoções conflitantes, usamos timestamps de relógio real, assumindo que os trackers têm NTP sincronizado. Como as atualizações de índice têm granularidade de segundos, a precisão do NTP é mais que suficiente. 
+Para ordenar remoções conflitantes, usaremos timestamps de relógio real, de forma a assumir que os trackers têm NTP sincronizado. Como as atualizações de índice têm granularidade de segundos, a precisão do NTP é mais que suficiente. 
 
 Relógios lógicos de Lamport ofereceriam ordenação causal estrita, que não é necessária aqui, já que a operação dominante é comutativa e não há dependência causal a preservar.
 
 \subsubsection*{Resolução de conflitos: Last Write Wins}
-Quando um tracker recebe uma atualização para uma entrada que já possui, compara os timestamps: se o recebido for mais recente, sobrescreve a versão local; caso contrário, descarta. 
+Quando um tracker recebe uma atualização para uma entrada que já possui, compara os timestamps: se o recebido for mais recente, sobrescreve a versão local. Caso contrário, descarta.
 
 É uma política simples e adequada ao domínio, já que o estado de um arquivo (quais peers o possuem) é naturalmente substituível pela versão mais nova.
 
 \subsubsection*{Remoção com tombstones}
 Quando um peer sai ou remove um arquivo, em vez de apagar a entrada na hora, o tracker a marca como removida por um período. 
 
-Isso evita o seguinte problema: se um tracker estava desconectado e perdeu a mensagem de remoção, ele continuaria servindo um peer que já saiu. Com o tombstone, ao voltar à rede o tracker aplica o LWW normalmente e efetiva a remoção. O período de retenção é de \textbf{10 minutos}, escolhido para cobrir partições curtas e o ciclo de reconciliação \textit{anti-entropy} entre trackers (Seção~\ref{sec:rep-protocolo}); passado esse prazo, o registro é descartado de vez. 
+Isso evita o seguinte problema: se um tracker estava desconectado e perdeu a mensagem de remoção, ele continuaria a servir um peer que já saiu. Com o tombstone, ao voltar à rede o tracker aplica o LWW normalmente e efetiva a remoção. O período de retenção é de \textbf{10 minutos}, escolhido para cobrir partições curtas e ficar acima do intervalo de reconciliação \textit{anti-entropy} entre trackers (Seção~\ref{sec:rep-protocolo}), de modo que uma remoção perdida seja reposta antes de expirar. Passado esse prazo, o registro é descartado de vez. 
 
 \subsubsection*{Distribuição das cópias}
 
@@ -875,19 +908,27 @@ Cada tracker mantém a lista dos demais e, ao atualizar seu índice, envia a atu
 Como a topologia é totalmente conectada, o \textit{flooding} aqui é ideal, já que cada mensagem vai uma única vez a cada destino, sem retransmissão, loops ou necessidade de TTL.
 
 \subsubsection*{Entrada dinâmica de trackers}
-Um novo tracker é iniciado com o endereço de pelo menos um tracker já ativo (\textit{bootstrap node}). Ele se anuncia a esse nó, recebe de volta o estado completo do índice e a lista de trackers ativos, e o \textit{bootstrap} divulga sua existência aos demais. A partir daí o novo tracker está integrado e passa a receber as atualizações.
+Um novo tracker é iniciado com o endereço de pelo menos um tracker já ativo (\textit{bootstrap node}). Ele se anuncia a esse nó com \texttt{TRACKER\_REJOIN} e recebe de volta apenas a lista de trackers ativos (\texttt{TRACKER\_LIST}), o índice em si é reconstruído separadamente via \texttt{SYNC\_PULL(desde\_seq=0)} por origem. O \textit{bootstrap} divulga sua existência aos demais via \texttt{TRACKER\_ANNOUNCE}. A partir daí o novo tracker está integrado e passa a receber as atualizações.
 
 \subsubsection*{Reconciliação anti-entropy}
 
-O \texttt{SYNC\_TABLE} é \textbf{incremental} (carrega só o que mudou) e enviado em modo \textit{best-effort}: o remetente não retransmite em caso de falha. Isso levanta uma pergunta legítima: se um tracker perder uma única mensagem \texttt{SYNC\_TABLE} por uma falha transitória de TCP, mas continuar no ar, esse delta some do caminho de \textit{flooding} e ele ficaria desatualizado indefinidamente. O \texttt{SYNC\_TABLE} sozinho, portanto, \textbf{não} fecha o problema de entropia.
+O \texttt{SYNC\_TABLE} é \textbf{incremental} (carrega só o que mudou) e enviado em modo \textit{best-effort}: o remetente não retransmite em caso de falha. Isso levanta uma pergunta: se um tracker perder uma única mensagem \texttt{SYNC\_TABLE} por uma falha transitória de TCP, mas continuar no ar, esse delta sumiria do caminho de \textit{flooding} e ele ficaria desatualizado. O \texttt{SYNC\_TABLE} sozinho, portanto, \textbf{não} fecha o problema de entropia.
 
-A convergência é garantida por um segundo mecanismo, executado em segundo plano: a \textbf{reconciliação anti-entropy periódica entre trackers}. A cada \textbf{3 minutos}, cada tracker envia aos demais uma mensagem \texttt{FULL\_SYNC} com o estado completo do seu índice, fontes ativas e \textit{tombstones}, cada qual com seu \textit{timestamp} e tracker de origem. O receptor aplica cada entrada pela mesma regra de \textit{Last Write Wins} do \texttt{SYNC\_TABLE}; como essa aplicação é idempotente e comutativa, reaplicar o estado completo não causa efeito colateral e apenas \textbf{repara o que estiver divergente}, qualquer que tenha sido a causa (mensagem perdida, partição curta ou tracker que reiniciou). O pior caso de desatualização passa a ser limitado a um intervalo de reconciliação, em vez de permanente.
+A convergência é garantida por dois mecanismos complementares que trabalham sobre um \textbf{número de sequência por origem}.
 
-É por isso que, quando um envio de \texttt{SYNC\_TABLE} falha, o remetente apenas marca o destino como suspeito e não reenvia na hora: a próxima rodada de anti-entropy corrige a diferença, sem precisar de filas de retransmissão por destino nem de confirmação (\textit{ACK}) por mensagem. Preferimos o anti-entropy periódico a um \texttt{SYNC\_TABLE} confiável com \textit{ACK} e retransmissão porque ele cobre, com um único mecanismo simples, também os casos que o \textit{ACK} não cobriria, como a queda do próprio remetente antes de concluir a entrega, ou um destino fora do ar por muito tempo. O período de reconciliação é mantido bem menor que a retenção dos \textit{tombstones} (Seção~\ref{sec:modelo_consistencia}), para que uma remoção perdida seja reposta antes de o \textit{tombstone} expirar.
+Números de sequência. Cada tracker mantém um contador monotônico \texttt{meu\_seq} e carimba toda escrita que origina (registro ou \textit{tombstone}) com o par \texttt{(origem, seq)}. Esse par viaja no \texttt{SYNC\_TABLE} e é guardado junto de cada entrada do índice, ao lado do \textit{timestamp}. Cada tracker mantém ainda um \textbf{vetor de versões} \texttt{visto[origem]}, com o maior \texttt{seq} já aplicado de cada origem, um inteiro por tracker. É importante separar os papéis: o \texttt{seq} serve só para \textbf{detectar} que algo se perdeu, quem \textbf{vence} um conflito continua a ser decidido pelo LWW (\textit{timestamp}, com \texttt{tracker\_id} de desempate).
 
-Em complemento, no sentido peer$\rightarrow$tracker, o \texttt{SEED\_REPORT} periódico (Seção~\ref{sec:mensagens}) reconcilia o índice \textit{local} do tracker ao qual o peer se reporta: hashes ausentes no relatório viram \textit{tombstone}, novos são registrados. E um tracker que tenha ficado muito tempo fora, ao voltar, recupera todo o índice de uma réplica viva via \texttt{TRACKER\_REJOIN}/\texttt{FULL\_SYNC}.
+Detecção inline e reparo direcionado. Como a topologia é totalmente conectada e o TCP preserva a ordem dentro de cada conexão, em operação normal os \texttt{seq} de um mesmo tracker chegam em sequência. Quando um \texttt{SYNC\_TABLE} de \texttt{X} chega com \texttt{seq} maior que \texttt{visto[X]\,+\,1}, o receptor sabe na hora que perdeu um delta \textit{daquele} tracker e pede só o que falta com um \texttt{SYNC\_PULL(\{X, visto[X]\})}. O tracker à frente responde filtrando o \textit{estado atual} pelas entradas que originou com \texttt{seq} acima do pedido e as reenvia como \texttt{SYNC\_TABLE}. Não é preciso manter um \textit{log} histórico de deltas: como cada entrada já carrega a \texttt{(origem, seq, timestamp)} da escrita corrente, reenviar o estado atual basta, e o LWW no receptor descarta o que estiver velho. O reparo custa o tamanho do que \textit{de fato} divergiu.
 
-Protocolos baseados em primário foram descartados para não precisar eleger um tracker líder, e protocolos por quórum também, já que votação só se justifica quando há conflitos de escrita a serializar, o que a comutatividade das adições e o LWW das remoções tornam desnecessário.
+\subsubsection*{Estado de pendência}
+ O \texttt{visto[origem]} é o \textit{maior} \texttt{seq} já visto daquela origem, não uma garantia de que tudo abaixo dele chegou: ele avança por \texttt{max} mesmo com uma lacuna em aberto. Receber a escrita 11 com \texttt{visto[X]\,=\,9} aplica a 11 no índice na hora (por LWW, como toda escrita) e leva \texttt{visto[X]} a 11, sem esperar a 10. A lacuna não trava o contador, ela vira uma \textbf{pendência}: um pequeno conjunto de pares \texttt{(origem, desde\_seq)} em aberto, em que \texttt{desde\_seq} guarda o \texttt{visto[X]} do instante em que o buraco foi detectado (9), e não o valor já avançado. É esse \texttt{desde\_seq} fixado que vai no \texttt{SYNC\_PULL}, de modo que o pedido cubra a 10 mesmo que \texttt{visto[X]} já esteja em 15. As escritas 12 a 15, que chegam depois, são aplicadas normalmente e não abrem novas pendências (cada uma é contígua com a anterior). A pendência governa apenas o que o pull pede e se fecha quando a resposta chega. Como o reparo é idempotente, ela é re-disparável: se a própria resposta se perder, a próxima escrita de \texttt{X} (detecção inline) ou o \texttt{SYNC\_DIGEST} periódico reabre o pedido.
+
+\subsubsection*{Digest de versões periódico}
+A detecção inline tem um ponto cego: se a \textit{última} escrita de um tracker se perde e ele fica em silêncio, não vem um \texttt{seq} posterior para revelar a lacuna. Para fechar essa borda, cada tracker envia periodicamente, num intervalo folgado de \textbf{5 minutos}, uma mensagem \texttt{SYNC\_DIGEST} com apenas o seu vetor de versões. O receptor compara componente a componente e, onde o emissor estiver à frente, dispara o mesmo \texttt{SYNC\_PULL}. Como o digest tem um custo computacional baixo, pode rodar com folga e ainda assim repor qualquer delta perdido antes de um \textit{tombstone} expirar, contanto que o intervalo do digest seja mantido abaixo da retenção dos \textit{tombstones} (Seção~\ref{sec:modelo_consistencia}).
+
+É por isso que, quando um envio de \texttt{SYNC\_TABLE} falha, o remetente apenas marca o destino como suspeito e não reenvia na hora: o próprio destino, ao notar a lacuna (inline ou pelo digest), puxa o que faltou.
+
+Em complemento, no sentido peer$\rightarrow$tracker, o \texttt{SEED\_REPORT} periódico (Seção~\ref{sec:mensagens}) reconcilia o índice \textit{local} do tracker ao qual o peer se reporta: hashes ausentes no relatório viram \textit{tombstone}, novos são registrados. E um tracker que tenha ficado muito tempo fora, ao voltar, recupera todo o índice de uma réplica viva com um \texttt{SYNC\_PULL} desde 0 por origem (que também inicializa seu vetor de versões).
 
 \subsection{Limitações assumidas}\label{sec:limit_repl}
 
@@ -915,13 +956,13 @@ Tanenbaum (Cap. 5.4) aponta que algoritmos de eleição são necessários apenas
 
 Cada peer mantém localmente uma lista ordenada de trackers conhecidos: o tracker principal e um ou mais trackers de backup. Quando o peer detecta que o tracker principal não responde (timeout na conexão duradoura), tenta o próximo da lista automaticamente, sem qualquer coordenação com outros nós da rede.
 
-A reorganização é imediata e local, o peer simplesmente passa a operar com o próximo tracker da lista, que já possui o índice completo sincronizado.
+A reorganização é imediata e local: o peer simplesmente passa a operar com o próximo tracker da lista, que já possui o índice completo sincronizado.
 
 \subsection{Reintegração do tracker e balanceamento de carga}\label{sec:reintegracao}
 
 Quando um tracker que estava fora do ar volta a funcionar, ele precisa: (1)~recuperar o estado atual do índice e (2)~receber de volta parte dos peers para distribuir a carga entre os trackers ativos.
 
-Ao iniciar, o tracker envia uma mensagem \texttt{TRACKER\_REJOIN} ao \textit{bootstrap node} que responde com \texttt{FULL\_SYNC} contendo o estado completo das tabelas e a lista atual de trackers ativos. O \textit{bootstrap node} então propaga \texttt{TRACKER\_ANNOUNCE} aos demais trackers, que adicionam o tracker reintegrado às suas listas \texttt{PEER\_TRACKERS}. Em seguida, cada tracker ativo cede uma fração de seus peers ao tracker reintegrado, enviando a cada peer cedido uma mensagem \texttt{REASSIGN\_TRACKER} com o endereço do novo tracker. A Figura~\ref{fig:reintegracao} detalha essa sequência no tempo.
+Ao iniciar, o tracker envia uma mensagem \texttt{TRACKER\_REJOIN} ao \textit{bootstrap node}, que responde com a lista atual de trackers ativos (\texttt{TRACKER\_LIST}) e propaga \texttt{TRACKER\_ANNOUNCE} aos demais, que adicionam o tracker reintegrado às suas listas de trackers ativos. Com a lista de trackers, o tracker reconstrói o índice como um caso particular do reparo comum: emite um \texttt{SYNC\_PULL} com \texttt{desde\_seq=0} para cada origem conhecida e recebe de volta o estado atual (inclusive \textit{tombstones}) como mensagens \texttt{SYNC\_TABLE}, ao aplicá-lo por LWW, inicializa seu vetor de versões e seu próprio contador de sequência. Em seguida, cada tracker ativo cede uma fração de seus peers ao tracker reintegrado, de maneira a enviar a cada peer cedido uma mensagem \texttt{REASSIGN\_TRACKER} com o endereço do novo tracker. A Figura~\ref{fig:reintegracao} detalha essa sequência no tempo.
 
 \begin{figure}[H]
     \centering
@@ -930,30 +971,30 @@ Ao iniciar, o tracker envia uma mensagem \texttt{TRACKER\_REJOIN} ao \textit{boo
     \label{fig:reintegracao}
 \end{figure}
 
-O critério de balanceamento é direto. Cada tracker ativo divide seu número atual de peers pelo número total de trackers na rede (incluindo o reintegrado) e cede o excedente, o que distribui a carga de forma aproximadamente uniforme sem necessidade de coordenação centralizada.
+O critério de balanceamento é direto. Cada tracker ativo divide seu número atual de peers pelo número total de trackers na rede (que inclui o reintegrado) e cede o excedente, o que distribui a carga de forma aproximadamente uniforme sem necessidade de coordenação centralizada.
 
 \subsubsection*{Sobre a consistência do balanceamento}
 Como cada tracker ativo calcula sua cessão de forma independente, há risco de \textit{sobrecessão}, todos os trackers cederem peers ao mesmo tempo e o tracker reintegrado acabar com mais peers que os demais. Esse desbalanceamento transitório é aceitável: na próxima rodada de \texttt{SEED\_REPORT}, cada tracker recalcula seu fator de carga e, se algum estiver substancialmente abaixo da média, novos \texttt{REASSIGN\_TRACKER} são emitidos no sentido inverso. O sistema converge para um balanceamento aproximadamente uniforme sem necessidade de coordenação atômica entre os trackers.
 
 \subsubsection*{Sobre a lista \texttt{TRACKERS} no peer}
-A lista de trackers que cada peer mantém localmente é estática no código apresentado. Para suportar a adição dinâmica de trackers, a lista pode ser estendida por uma resposta opcional do tracker em qualquer comunicação subsequente, incluindo um campo \texttt{trackers\_conhecidos} com o conjunto atual de trackers ativos. O peer atualiza sua lista local com essa informação. Para simplicidade do protótipo, no escopo deste trabalho assumimos a lista estática, mas a limitação é registrada aqui explicitamente.
+A lista de trackers que cada peer mantém localmente é estática no código apresentado. Para suportar a adição dinâmica de trackers, a lista pode ser estendida por uma resposta opcional do tracker em qualquer comunicação subsequente, o que inclui um campo \texttt{trackers\_conhecidos} com o conjunto atual de trackers ativos. O peer atualiza sua lista local com essa informação. Para simplicidade do protótipo, no escopo deste trabalho assumimos a lista estática, mas a limitação é registrada aqui explicitamente.
 
 \subsection{Disponibilidade ou Confiabilidade?}\label{sec:disp_conf}
 
-Entre disponibilidade (estar pronto para uso a qualquer instante) e confiabilidade (operar continuamente, sem falhas, por longos períodos), o PeerSpot prioriza a \textbf{disponibilidade}. Essa decisão vem do próprio domínio, pois, em um serviço de compartilhamento de música, é melhor que uma busca responda rápido com um resultado talvez desatualizado (por exemplo, um peer que acabou de sair) do que travar a resposta esperando ter certeza absoluta.
+Entre disponibilidade (estar pronto para uso a qualquer instante) e confiabilidade (operar continuamente, sem falhas, por longos períodos), o PeerSpot prioriza a \textbf{disponibilidade}. Essa decisão vem do próprio domínio, pois, em um serviço de compartilhamento de música, é melhor que uma busca responda rápido com um resultado talvez desatualizado (por exemplo, um peer que acabou de sair) do que travar a resposta à espera de certeza absoluta.
 
-Essa preferência é coerente com as escolhas que já fizemos: o índice é replicado em todos os trackers (qualquer um responde), o peer troca na hora para um tracker de backup quando o principal cai (Seção~\ref{sec:fallback_peer}) e o sistema opera sob consistência eventual (Seção~\ref{sec:modelo_consistencia}). Em troca, abrimos mão da confiabilidade estrita, aceitando pequenas inconsistências transitórias em favor da disponibilidade e da simplicidade.
+Essa preferência é coerente com as escolhas que já fizemos: o índice é replicado em todos os trackers (qualquer um responde), o peer troca na hora para um tracker de backup quando o principal cai (Seção~\ref{sec:fallback_peer}) e o sistema opera sob consistência eventual (Seção~\ref{sec:modelo_consistencia}). Em troca, abrimos mão da confiabilidade estrita, de forma a aceitar pequenas inconsistências transitórias em favor da disponibilidade e da simplicidade.
 
 \subsection{Tipos de Falha que se Deseja Tolerar}\label{sec:tipos-falha}
 
-O PeerSpot assume o modelo \textit{crash} (\textit{fail-stop}): os nós podem parar, mas não passam a se comportar de forma arbitrária. Percorrendo os tipos de falha:
+O PeerSpot assume o modelo \textit{crash} (\textit{fail-stop}): os nós podem parar, mas não passam a se comportar de forma arbitrária. A seguir, percorremos os tipos de falha:
 
 \begin{itemize}
     \item \textbf{Crash (parada):} \textbf{tolerada}. É o caso central. Peers e trackers podem parar de uma hora para outra, e a tolerância vem da replicação total do índice e da auto-replicação dos arquivos.
-    \item \textbf{Omissão (perda de mensagens):} \textbf{mitigada}. Mensagens perdidas são repostas pela reconciliação \textit{anti-entropy} periódica entre trackers (\texttt{FULL\_SYNC}), pelo \texttt{SEED\_REPORT} no sentido peer$\rightarrow$tracker e pelo \texttt{FULL\_SYNC} na reintegração; o uso de TCP já evita a maior parte das perdas.
+    \item \textbf{Omissão (perda de mensagens):} \textbf{mitigada}. Mensagens perdidas são repostas pela reconciliação \textit{anti-entropy} entre trackers (detecção por número de sequência e reparo por \texttt{SYNC\_PULL}, mais o \texttt{SYNC\_DIGEST} periódico), pelo \texttt{SEED\_REPORT} no sentido peer$\rightarrow$tracker e pela reconstrução do índice na reintegração (\texttt{SYNC\_PULL} desde 0). Além disso, o uso de TCP já evita a maior parte das perdas.
     \item \textbf{Falha de resposta (resposta incorreta):} \textbf{fora do escopo}. Assumimos que um nó que responde, responde certo. Na prática, uma resposta que não chega recai no caso de crash ou omissão.
     \item \textbf{Falha temporal:} \textbf{fora do escopo}. Assumimos o NTP funcionando, e pequenos desvios de relógio são absorvidos pelo LWW.
-    \item \textbf{Arbitrária / bizantina:} \textbf{fora do escopo}. Não tratamos nós maliciosos ou com comportamento arbitrário; não há votação nem assinatura para detectar mentiras. Também não há autenticação de peers.
+    \item \textbf{Arbitrária / bizantina:} \textbf{fora do escopo}. Não tratamos nós maliciosos ou com comportamento arbitrário. Não há votação nem assinatura para detectar mentiras. Também não há autenticação de peers.
 \end{itemize}
 
 \subsection{Quantos Processos Falhantes Serão Suportados?}
@@ -961,13 +1002,13 @@ O PeerSpot assume o modelo \textit{crash} (\textit{fail-stop}): os nós podem pa
 Como o PeerSpot não usa votação por quórum nem acordo bizantino, não vale aqui o limite de $k+1$ réplicas para tolerar $k$ falhas. A tolerância depende apenas do grau de replicação:
 
 \begin{itemize}
-    \item \textbf{Trackers:} como o índice está replicado por inteiro nos $N$ trackers, a busca continua funcionando enquanto pelo menos um deles estiver no ar, ou seja, toleramos a queda de até $N-1$ trackers ao mesmo tempo. Os peers migram sozinhos para o próximo tracker da lista (Seção~\ref{sec:fallback_peer}).
+    \item \textbf{Trackers:} como o índice está replicado por inteiro nos $N$ trackers, a busca continua a funcionar enquanto pelo menos um deles estiver no ar, ou seja, toleramos a queda de até $N-1$ trackers ao mesmo tempo. Os peers migram sozinhos para o próximo tracker da lista (Seção~\ref{sec:fallback_peer}).
     \item \textbf{Arquivos:} um arquivo continua acessível enquanto pelo menos um peer que o possui estiver on-line. Se ele tem $r$ cópias na rede, toleramos a perda de até $r-1$ delas. Como o sistema não controla $r$ (a replicação é orientada a demanda), não há garantia de um número mínimo de cópias, limitação já registrada na Seção~\ref{sec:limit_repl}.
 \end{itemize}
 
 \subsection{Estratégias para Detectar Falhas}\label{sec:detec-falha}
 
-A detecção é sempre baseada em \textbf{timeout}, seja sobre uma comunicação periódica, seja sobre uma conexão. O caso que realmente exige detecção ativa é a \textbf{saída desordenada} de um peer (queda de conexão, processo encerrado de repente, máquina desligada), em que não chega nenhum \texttt{PEER\_LEAVE} avisando da saída. No PeerSpot, há três caminhos de detecção:
+A detecção é sempre baseada em \textbf{timeout}, seja sobre uma comunicação periódica, seja sobre uma conexão. O caso que realmente exige detecção ativa é a \textbf{saída desordenada} de um peer (queda de conexão, processo encerrado de repente, máquina desligada), em que não chega nenhum \texttt{PEER\_LEAVE} que avisa da saída. No PeerSpot, há três caminhos de detecção:
 
 \begin{itemize}
     \item \textbf{Falha de peer, detectada pelo tracker:} se um peer fica duas rodadas seguidas (6~min) sem enviar \texttt{SEED\_REPORT}, o tracker o considera falho, marca todas as suas entradas com \textit{tombstone} e propaga via \texttt{SYNC\_TABLE}. A detecção acaba sendo um efeito colateral da troca periódica de mensagens.
@@ -994,14 +1035,14 @@ O PeerSpot não usa protocolo de consenso (Paxos, Raft) nem commit distribuído 
     \item \textbf{Comunicação confiável ponto a ponto:} o TCP unicast garante entrega ordenada ou um erro explícito.
     \item \textbf{Detecção de falhas por timeout} (Seção~\ref{sec:detec-falha}).
     \item \textbf{Redundância por replicação:} índice replicado por inteiro e arquivos auto-replicados entre os peers.
-    \item \textbf{Recuperação por transferência de estado:} o \texttt{FULL\_SYNC} reconstrói o índice de um tracker reintegrado (Seção~\ref{sec:reintegracao}).
+    \item \textbf{Recuperação por transferência de estado:} o \texttt{SYNC\_PULL} repõe deltas perdidos em regime e reconstrói o índice de um tracker reintegrado (pedido desde 0) (Seção~\ref{sec:reintegracao}).
 \end{enumerate}
 
 \subsection{Consequências do Teorema CAP}
 
 O teorema CAP diz que, durante uma \textbf{partição de rede} (P), um sistema distribuído não consegue garantir ao mesmo tempo \textbf{consistência forte} (C) e \textbf{disponibilidade} (A): é preciso escolher uma das duas.
 
-O PeerSpot é, por escolha, um sistema \textbf{AP}: diante de uma partição entre trackers, cada lado continua respondendo a buscas e aceitando registros com seu índice local (prioriza A), abrindo mão da consistência forte (sacrifica C) e operando sob consistência eventual. Quando a partição é curada, os índices voltam a convergir via \textit{anti-entropy} periódica entre trackers (\texttt{FULL\_SYNC}) e via \texttt{SEED\_REPORT}, com os conflitos resolvidos por LWW (Seção~\ref{sec:rep-protocolo}).
+O PeerSpot é, por escolha, um sistema \textbf{AP}: diante de uma partição entre trackers, cada lado continua a responder a buscas e a aceitar registros com seu índice local (prioriza A), abrindo mão da consistência forte (sacrifica C) e operando sob consistência eventual. Quando a partição é curada, os índices voltam a convergir via \textit{anti-entropy} entre trackers (\textit{digest} de versões e \texttt{SYNC\_PULL}) e via \texttt{SEED\_REPORT}, com os conflitos resolvidos por LWW (Seção~\ref{sec:rep-protocolo}).
 
 Na prática, isso significa que:
 \begin{itemize}
@@ -1016,9 +1057,9 @@ Os mecanismos de recuperação variam conforme o tipo de falha:
 
 \begin{itemize}
     \item \textbf{Tracker que cai:} os peers migram na hora para um tracker de backup já sincronizado (Seção~\ref{sec:fallback_peer}), sem perder o serviço.
-    \item \textbf{Tracker que retorna:} reconstrói todo o índice a partir de um tracker ativo, via \texttt{TRACKER\_REJOIN} seguido de \texttt{FULL\_SYNC} (Seção~\ref{sec:reintegracao}). É como restaurar o estado atual de uma réplica viva, sem precisar reaplicar um log de operações. Em seguida vem o rebalanceamento de carga.
-    \item \textbf{Partição curta:} a reconciliação \textit{anti-entropy} periódica entre trackers (\texttt{FULL\_SYNC}) repõe sozinha as entradas que faltaram.
-    \item \textbf{Peer que cai:} suas entradas viram \textit{tombstone} após o timeout do \texttt{SEED\_REPORT} (Seção~\ref{sec:detec-falha}); quando ele volta, basta se re-registrar para constar de novo como fonte.
+    \item \textbf{Tracker que retorna:} reconstrói todo o índice a partir de um tracker ativo, via \texttt{TRACKER\_REJOIN} seguido de um \texttt{SYNC\_PULL} desde 0 por origem (Seção~\ref{sec:reintegracao}). É como restaurar o estado atual de uma réplica viva, sem precisar reaplicar um log de operações. Em seguida vem o rebalanceamento de carga.
+    \item \textbf{Partição curta:} a reconciliação \textit{anti-entropy} entre trackers (\textit{digest} de versões + \texttt{SYNC\_PULL}) repõe sozinha as entradas que faltaram.
+    \item \textbf{Peer que cai:} suas entradas viram \textit{tombstone} após o timeout do \texttt{SEED\_REPORT} (Seção~\ref{sec:detec-falha}). Quando ele volta, basta se re-registrar para constar de novo como fonte.
 \end{itemize}
 
 Como o índice fica em memória e pode sempre ser reconstruído a partir das réplicas vivas ou dos próprios peers, os trackers não precisam de \textit{checkpoint} em disco nem de \textit{log} de mensagens: o ``checkpoint'', na prática, é o estado de qualquer réplica que esteja no ar.
