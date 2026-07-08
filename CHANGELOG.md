@@ -5,7 +5,61 @@ Todas as mudanças notáveis do projeto PeerSpot são documentadas neste arquivo
 O formato é baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/)
 e o projeto segue [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
-## [Não lançado]
+## [1.0.0] — Projeto completo
+
+Todas as 7 fases do plano de implementação (§9 do `CLAUDE.md`) concluídas e os
+**10 critérios de aceitação final (§12) verificados ✅** com os 6 nós reais.
+
+### Adicionado
+- **Fase 7 — Empacotamento de execução local e documentação** (§9 do `CLAUDE.md`):
+  scripts de conveniência, README completo e verificação final ponta a ponta. **Sem
+  Docker** — a execução multi-nó é feita com um terminal por processo em `127.0.0.1`
+  (§8).
+  - `scripts/run_tracker.sh <n>` e `scripts/run_peer.sh <nome>` — ativam o `.venv` se
+    existir (`.venv/bin/activate` ou `.venv/Scripts/activate` no Git Bash/Windows),
+    exportam `PYTHONPATH=.`, resolvem a raiz do projeto pelo diretório do script (rodam
+    de qualquer `cwd`) e fazem `exec python -m src.{tracker,peer}.main --config …`. Todos
+    os comandos permanecem acessíveis rodando `python -m …` diretamente.
+  - `scripts/run_all_trackers.sh` — se houver `tmux`, sobe os 3 trackers numa sessão
+    `peerspot` com 3 painéis respeitando a ordem (bootstrap primeiro, com `sleep` antes
+    do tracker-2/3 pela reintegração via `TRACKER_REJOIN`); sem `tmux`, imprime os
+    comandos manuais. Os três scripts com `chmod +x` (bit executável também no git).
+  - `README.md` reescrito (PT-BR): tecnologias, pré-requisitos/venv, estrutura, as
+    **duas formas** de subir o ambiente (scripts **e** `python -m …` manual, lado a
+    lado) na ordem correta, tabela de portas, comandos da CLI, roteiro de demonstração
+    de 9 passos, inspeção via `curl` (`/health`, `/trackers`, `POST /search` com
+    `ttl=0` para ver o índice local de cada tracker), como rodar os testes, reset do
+    ambiente e limitações conhecidas (playlists não replicadas, lista `TRACKERS`
+    estática, sem replicação mínima de arquivos, modelo *crash*). Créditos com os 4
+    alunos.
+  - Os 6 `config/*.yaml` (§6.6/§7.6) já estavam completos das fases anteriores e foram
+    validados: todos em `127.0.0.1`, portas distintas (trackers api 8001-8003 / sync
+    9001-9003; peers 7001-7003), `known_trackers` de cada tracker apontando aos outros
+    dois (com `sync_port` **e** `api_port`), peers listando os 3 trackers, e paths
+    (`db_path`/`storage_dir`/`log_path`) relativos à raiz.
+
+### Verificação final — Critérios de Aceitação (§12 do `CLAUDE.md`)
+Executada com **3 trackers como subprocessos reais** (via o entrypoint
+`python -m src.tracker.main`, onde vivem sync/reintegração/failure/rebalance) e **3
+peers com os componentes reais** (`Storage`/`PeerTCPServer`/`PeerTrackerClient`/
+`Downloader`), arquivo de teste de **5 MiB (20 chunks)**:
+
+1. ✅ 3 trackers + 3 peers sobem (bootstrap primeiro) e conectam — `/health` OK nos 3.
+2. ✅ `alice` faz upload de ~5 MB; `tracker-1` registra (visível no seu `POST /search`).
+3. ✅ Em **0,37 s** (< 3 s) `tracker-2` e `tracker-3` têm o hash no índice local.
+4. ✅ `bob` (primário `tracker-2`) busca por nome, encontra e baixa.
+5. ✅ Download usou **só `alice`** como fonte; depois `bob` reaparece como 2ª fonte;
+   SHA-256 do arquivo final confere.
+6. ✅ `carol` (primário `tracker-3`) baixa com `alice`+`bob` como fontes disponíveis;
+   SHA-256 confere (distribuição paralela *rarest-first* também coberta por
+   `test_download_parallel`).
+7. ✅ `Ctrl+C` (kill) no `tracker-1` → `alice` faz **fallback automático**
+   `tracker-1 → tracker-2` na operação seguinte.
+8. ✅ Reabrir o `tracker-1` → reintegra via `TRACKER_REJOIN` → `TRACKER_LIST` →
+   `SYNC_PULL(desde_seq=0)` e **reconstrói o índice em 0,19 s** (hash de volta no t1).
+9. ✅ `alice` remove o arquivo → em < 3 s `tracker-2`/`tracker-3` registram o
+   *tombstone* (alice sai das fontes) e `bob` **permanece** como fonte.
+10. ✅ `pytest -v` — **175 testes** passam (100%, ~30 s).
 
 ### Adicionado
 - **Fase 6 — Playlists e comandos auxiliares de CLI** (§9 do `CLAUDE.md`):
