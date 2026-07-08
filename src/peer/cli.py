@@ -17,6 +17,8 @@ import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
 
+from src.peer.tracker_client import TodosTrackersIndisponiveis
+
 if TYPE_CHECKING:
     from src.common.messages import SearchResultEntry
     from src.peer.downloader import Downloader
@@ -79,25 +81,28 @@ class PeerCLI:
         """Executa um comando; ``False`` encerra o loop (``quit``)."""
         comando, _, resto = linha.partition(" ")
         resto = resto.strip()
-        match comando:
-            case "help":
-                print(_AJUDA)
-            case "upload":
-                self._cmd_upload(resto)
-            case "search":
-                self._cmd_search(resto)
-            case "download":
-                self._cmd_download(resto)
-            case "list":
-                self._cmd_list()
-            case "remove":
-                self._cmd_remove(resto)
-            case "peers" | "playlist" | "status":
-                print(f"'{comando}' ainda não implementado (Fases 5/6).")
-            case "quit":
-                return False
-            case _:
-                print(f"Comando desconhecido: '{comando}'. Digite 'help'.")
+        try:
+            match comando:
+                case "help":
+                    print(_AJUDA)
+                case "upload":
+                    self._cmd_upload(resto)
+                case "search":
+                    self._cmd_search(resto)
+                case "download":
+                    self._cmd_download(resto)
+                case "list":
+                    self._cmd_list()
+                case "remove":
+                    self._cmd_remove(resto)
+                case "peers" | "playlist" | "status":
+                    print(f"'{comando}' ainda não implementado (Fase 6).")
+                case "quit":
+                    return False
+                case _:
+                    print(f"Comando desconhecido: '{comando}'. Digite 'help'.")
+        except TodosTrackersIndisponiveis:
+            print("Todos os trackers estão indisponíveis (veja o log).")
         return True
 
     # ------------------------------------------------------------------

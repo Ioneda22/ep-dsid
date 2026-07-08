@@ -12,6 +12,7 @@ API as converte em mensagens ``ERROR``.
 from __future__ import annotations
 
 import logging
+from typing import Any
 
 from src.common.messages import (
     PeerHello,
@@ -24,19 +25,36 @@ from src.common.messages import (
     SyncTableEntry,
     UpdateIp,
 )
-from src.tracker.index import Index
+from src.tracker.index import Index, LocalDelta
 from src.tracker.persistence import TrackerDB
 from src.tracker.routing import SearchRouter
 from src.tracker.sync_client import SyncClient
 
 logger = logging.getLogger(__name__)
 
-#: Resposta padrão das operações de escrita bem-sucedidas (camada REST).
-AckOk = dict[str, str]
+#: Resposta das operações de escrita: ``{"status": "ok"}`` e, quando o rebalance
+#: agendou uma migração para este peer, também ``reassign_to`` (main.tex §12.4).
+AckOk = dict[str, Any]
 
 
-def _ack() -> AckOk:
-    return {"status": "ok"}
+def _ack(index: Index | None = None, nome_peer: str | None = None) -> AckOk:
+    """Monta o ACK, anexando ``reassign_to`` se houver migração pendente ao peer."""
+    resposta: AckOk = {"status": "ok"}
+    if index is not None and nome_peer is not None:
+        alvo = index.consumir_reassign(nome_peer)
+        if alvo is not None:
+            resposta["reassign_to"] = {"ip": alvo[0], "api_port": alvo[1]}
+            logger.info(
+                "REASSIGN_TRACKER: peer %s -> %s:%d", nome_peer, alvo[0], alvo[1]
+            )
+    return resposta
+
+
+def _propagar(sync_client: SyncClient | None, delta: LocalDelta | None) -> None:
+    """Floods as entradas de um evento multi-hash com o ``seq``/``timestamp`` únicos."""
+    if sync_client is None or delta is None:
+        return
+    sync_client.propagar_sync(delta.entries, seq=delta.seq, timestamp=delta.timestamp)
 
 
 def handle_peer_hello(msg: PeerHello, index: Index, db: TrackerDB) -> AckOk:
@@ -46,13 +64,16 @@ def handle_peer_hello(msg: PeerHello, index: Index, db: TrackerDB) -> AckOk:
     logger.info(
         "PEER_HELLO: nome_peer=%s endereco=%s:%d", msg.nome_peer, msg.ip, msg.porta
     )
-    return _ack()
+    return _ack(index, msg.nome_peer)
 
 
-def handle_peer_leave(msg: PeerLeave, index: Index) -> AckOk:
-    """Saída ordenada: remove o peer e tombstona todas as suas fontes."""
-    index.remove_peer(msg.nome_peer)
+def handle_peer_leave(
+    msg: PeerLeave, index: Index, sync_client: SyncClient | None = None
+) -> AckOk:
+    """Saída ordenada: remove o peer, tombstona suas fontes e propaga (main.tex §13.4)."""
+    delta = index.remove_peer(msg.nome_peer)
     logger.info("PEER_LEAVE: nome_peer=%s", msg.nome_peer)
+    _propagar(sync_client, delta)
     return _ack()
 
 
@@ -65,22 +86,26 @@ def handle_update_ip(msg: UpdateIp, index: Index) -> AckOk:
         msg.novo_ip,
         msg.porta,
     )
-    return _ack()
+    return _ack(index, msg.nome_peer)
 
 
-def handle_seed_report(msg: SeedReport, index: Index) -> AckOk:
+def handle_seed_report(
+    msg: SeedReport, index: Index, sync_client: SyncClient | None = None
+) -> AckOk:
     """Sinal de vida + anti-entropy do índice (main.tex §7.2).
 
     Re-registra a presença (o relatório carrega ip/porta justamente para
-    reconstruir o índice após restart do tracker) e reconcilia os hashes:
-    hash omitido em relação ao estado atual equivale a PEER_LEAVE_FILE.
+    reconstruir o índice após restart do tracker), reconcilia os hashes (hash
+    omitido equivale a PEER_LEAVE_FILE) e propaga o delta resultante via
+    ``SYNC_TABLE`` — a detecção por ``seq``/digest é backstop.
     """
     index.register_peer(msg.nome_peer, msg.ip, msg.porta)
-    index.apply_seed_hashes(msg.nome_peer, set(msg.hashes))
+    delta = index.apply_seed_hashes(msg.nome_peer, set(msg.hashes))
     logger.debug(
         "SEED_REPORT: nome_peer=%s n_hashes=%d", msg.nome_peer, len(msg.hashes)
     )
-    return _ack()
+    _propagar(sync_client, delta)
+    return _ack(index, msg.nome_peer)
 
 
 def handle_register_file(
@@ -120,7 +145,7 @@ def handle_register_file(
             seq=entry.seq,
             timestamp=entry.timestamp,
         )
-    return _ack()
+    return _ack(index, msg.nome_peer)
 
 
 def handle_peer_leave_file(
@@ -147,7 +172,7 @@ def handle_peer_leave_file(
             seq=tombstone.seq,
             timestamp=tombstone.timestamp,
         )
-    return _ack()
+    return _ack(index, msg.nome_peer)
 
 
 def handle_search_file(

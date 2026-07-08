@@ -22,7 +22,7 @@ from src.peer.seed_reporter import SeedReporter
 from src.peer.storage import Storage
 from src.peer.tcp_client import PeerTCPClient
 from src.peer.tcp_server import PeerTCPServer
-from src.peer.tracker_client import PeerTrackerClient
+from src.peer.tracker_client import PeerTrackerClient, TodosTrackersIndisponiveis
 
 logger = logging.getLogger(__name__)
 
@@ -91,10 +91,18 @@ def _montar_peer(
         tcp_client=tcp_client,
         storage=storage,
         chunk_manager=ChunkManager(),
+        download_pool_size=settings.download_pool_size,
     )
     cli = PeerCLI(settings.nome_peer, storage, tracker_client, downloader)
     server = PeerTCPServer(settings.ip, settings.porta, storage)
-    reporter = SeedReporter(settings.seed_report_interval_seconds)
+    reporter = SeedReporter(
+        nome_peer=settings.nome_peer,
+        ip=settings.ip,
+        porta=settings.porta,
+        storage=storage,
+        tracker_client=tracker_client,
+        interval_seconds=settings.seed_report_interval_seconds,
+    )
     return cli, server, tcp_client, tracker_client, reporter
 
 
@@ -123,16 +131,22 @@ def main(argv: list[str] | None = None) -> None:
         return
     reporter.start()
 
-    if (
-        tracker_client.peer_hello(settings.nome_peer, settings.ip, settings.porta)
-        is None
-    ):
+    try:
+        resposta_hello = tracker_client.peer_hello(
+            settings.nome_peer, settings.ip, settings.porta
+        )
+    except TodosTrackersIndisponiveis:
+        resposta_hello = None
+    if resposta_hello is None:
         print("Aviso: PEER_HELLO falhou — tracker indisponível? (veja o log)")
 
     try:
         cli.run()
     finally:
-        tracker_client.peer_leave(settings.nome_peer)
+        try:
+            tracker_client.peer_leave(settings.nome_peer)
+        except TodosTrackersIndisponiveis:
+            logger.warning("PEER_LEAVE não enviado: todos os trackers indisponíveis")
         reporter.stop()
         server.stop()
         tcp_client.close_all()

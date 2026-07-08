@@ -50,6 +50,7 @@ from src.common.protocol import (
     send_json_line,
 )
 from src.tracker.index import Index
+from src.tracker.rebalance import RebalanceManager
 from src.tracker.routing import handle_search_forward
 from src.tracker.sync_client import KnownTracker, SyncClient
 
@@ -78,12 +79,14 @@ class SyncServer:
         sync_port: int,
         index: Index,
         sync_client: SyncClient | None = None,
+        rebalance: RebalanceManager | None = None,
     ) -> None:
         self.tracker_id = tracker_id
         self.ip = ip
         self.porta = sync_port
         self.index = index
         self.sync_client = sync_client
+        self.rebalance = rebalance
         self.started = threading.Event()
         self._encerrando = False
         self._srv: socket.socket | None = None
@@ -323,6 +326,7 @@ class SyncServer:
             )
             return
         self._anunciar_novo_tracker(msg)
+        self._ceder_peers(msg.tracker_id)
         logger.info(
             "TRACKER_REJOIN de %s: respondi TRACKER_LIST (%d trackers) e anunciei",
             msg.tracker_id,
@@ -337,7 +341,13 @@ class SyncServer:
         self.sync_client.adicionar_tracker(
             KnownTracker(novo.tracker_id, novo.ip, novo.porta)
         )
+        self._ceder_peers(novo.tracker_id)
         logger.info("TRACKER_ANNOUNCE: tracker %s agora conhecido", novo.tracker_id)
+
+    def _ceder_peers(self, novo_tracker_id: str) -> None:
+        """Agenda a cessão de peers locais ao tracker reintegrado (rebalance, §6.5)."""
+        if self.rebalance is not None:
+            self.rebalance.ceder_peers_para(novo_tracker_id)
 
     def _trackers_ativos(self) -> list[TrackerListItem]:
         """Membership atual (este tracker + os conhecidos) para o ``TRACKER_LIST``."""

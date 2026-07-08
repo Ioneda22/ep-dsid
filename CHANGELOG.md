@@ -8,6 +8,87 @@ e o projeto segue [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 ## [Não lançado]
 
 ### Alterado
+- **Eventos multi-hash agora carimbam um único `timestamp` (além do único
+  `seq`)**: `Index.remove_peer` (PEER_LEAVE), `apply_seed_hashes` (reconciliação
+  do SEED_REPORT) e o novo `detectar_peers_falhos` tocam vários pares
+  (hash, peer) sob UM `seq` e UM `timestamp` capturados uma vez por evento. Sem
+  isso, a `SYNC_TABLE` de propagação (timestamp no nível da mensagem) divergiria
+  do que ficou gravado localmente e o LWW não convergiria entre réplicas.
+  `_registrar_fonte_locked`/`_tombstone_locked` ganharam um parâmetro opcional
+  `timestamp`; novo helper `_tombstonar_para_delta_locked` reúne tombstone +
+  `SyncTableEntry` num passo. `remove_peer` e `apply_seed_hashes` passaram a
+  devolver um `LocalDelta(seq, timestamp, entries)` para o handler propagar.
+- **`PEER_LEAVE` e a reconciliação do `SEED_REPORT` agora PROPAGAM via
+  `SYNC_TABLE`** (antes eram limitações conhecidas da Fase 4): `handle_peer_leave`
+  e `handle_seed_report` recebem o `SyncClient` e floodam o `LocalDelta`
+  resultante. A detecção por `seq`/digest continua como backstop.
+- **`AckOk` passou de `dict[str, str]` para `dict[str, Any]`**: as respostas de
+  escrita podem carregar `reassign_to` (objeto `{ip, api_port}`) quando o
+  rebalance agendou uma migração para aquele peer. Rotas de `api.py` anotadas
+  como `dict[str, Any]`.
+- **`config/tracker-{1,2,3}.yaml`: `known_trackers` ganhou `api_port`** por
+  entrada — o rebalance precisa do endereço REST do tracker reintegrado para
+  dizer ao peer cedido onde se reportar (o sync só conhecia `sync_port`).
+
+### Adicionado
+- **Fase 5 — Robustez e dinamismo** (§9 do `CLAUDE.md`): failure detector,
+  SEED_REPORT real, fallback de tracker, download paralelo e rebalance por
+  `REASSIGN_TRACKER`. A reintegração (`TRACKER_REJOIN` → `TRACKER_LIST` →
+  `SYNC_PULL(desde_seq=0)`) já vinha do refactor da reconciliação; aqui entrou a
+  cessão de peers. **NÃO** houve reintrodução de `FULL_SYNC`.
+  - `src/peer/seed_reporter.py` — `SeedReporter` real (antes stub): thread que a
+    cada `seed_report_interval_seconds` (180s) envia `SEED_REPORT` com
+    `storage.list_local_files()` pelo `PeerTrackerClient` (respeitando o
+    fallback). `enviar_agora()` para inicialização/testes (§10).
+  - `src/tracker/failure_detector.py` (novo) — `FailureDetector`: thread que a
+    cada 60s chama `Index.detectar_peers_falhos(timeout)`; peer sem `SEED_REPORT`
+    há > `seed_report_timeout_seconds` (360s = 2 rodadas) sai da presença, tem
+    todas as fontes tombstonadas (um `seq`/`timestamp` por peer) e a remoção é
+    propagada via `SYNC_TABLE`. Espelha o `TombstoneReaper` (relógio injetável).
+  - `src/tracker/index.py` — `detectar_peers_falhos`, `listar_peers_locais`,
+    `agendar_reassign`/`consumir_reassign` (fila de migrações pendentes por peer)
+    e o `LocalDelta`. `apply_sync_entry` e a lógica de `seq`/pendência/digest
+    ficaram **inalterados**.
+  - `src/peer/tracker_client.py` — fallback COMPLETO (§7.5): lista `trackers` do
+    YAML, `current_tracker_index` que não reseta, avanço em timeout/conexão
+    recusada com `PEER_HELLO` automático ao novo tracker, e
+    `TodosTrackersIndisponiveis` quando todos falham. Migração por `reassign_to`
+    na resposta (entrega do `REASSIGN_TRACKER` sobre REST, sem push tracker→peer).
+  - `src/peer/downloader.py` — download **paralelo** (substitui o sequencial da
+    Fase 3): `CHUNK_LIST_REQUEST` em paralelo, plano rarest-first (chunk raro
+    primeiro, fonte de menor carga como primária + fallbacks) e
+    `ThreadPoolExecutor(download_pool_size)`; chunk sem fonte que sirva falha o
+    download. Retomada a partir do disco preservada.
+  - `src/peer/tcp_client.py` — thread-safe para o pool: um lock POR DESTINO
+    (fontes distintas em paralelo; mesma fonte serializa na sua conexão única) +
+    `_dict_lock` para o cache de conexões.
+  - `src/tracker/rebalance.py` (novo) — `RebalanceManager`: ao processar
+    `TRACKER_REJOIN`/`TRACKER_ANNOUNCE`, cada tracker ativo cede
+    `floor(meus_peers_locais / N_trackers)` peers ao reintegrado via
+    `agendar_reassign` (endereço REST vindo do `api_por_tracker_id` do YAML).
+    `SyncServer` ganhou o gatilho `_ceder_peers`.
+  - Hooks: `handle_peer_hello/seed_report/register_file/peer_leave_file` anexam
+    `reassign_to` quando há migração pendente; `src/tracker/main.py` sobe o
+    `FailureDetector` e o `RebalanceManager`; `src/peer/main.py` liga o
+    `SeedReporter` real e o `download_pool_size`; `src/peer/cli.py` trata
+    `TodosTrackersIndisponiveis`. `config/peer-carol.yaml` criado (3º peer).
+  - Testes (6 novos): `tests/integration/test_seed_report.py` (hash omitido no
+    relatório vira tombstone), `test_failure_detection.py` (relógio injetado +7
+    min → tombstone + `SYNC_TABLE` com `seq`; `SyncClient` fake),
+    `test_fallback.py` (2 trackers reais: tracker cai → peer migra e se
+    reapresenta), `test_download_parallel.py` (alice 0-3 / bob 2-5 → carol usa as
+    duas fontes, SHA-256 confere), `test_tracker_rejoin.py` (rebalance:
+    `floor(3/3)=1` cedido, peer migra via `reassign_to` REST; e caso
+    `floor(1/3)=0` não cede). `tests/integration/cluster.py` liga o
+    `RebalanceManager` (mapa de `api_port` pré-resolvido). Suíte completa:
+    **167 testes** (~27 s).
+  - Demonstração manual com 3 trackers em processos reais (bootstrap primeiro):
+    upload de 5 MB (20 chunks) na alice via tracker-1 replicou aos trackers 2 e 3
+    em 0,38 s; carol baixou distribuindo **10 chunks de alice + 10 de bob** em
+    paralelo (SHA-256 conferido); ao derrubar o tracker-1, um peer migrou sozinho
+    para o tracker-2; ao reabrir o tracker-1, ele reintegrou via `TRACKER_REJOIN`
+    → `TRACKER_LIST` → `SYNC_PULL(desde_seq=0)` e reconstruiu o índice (3 entradas,
+    3 origens — sem reenviar o índice inteiro).
 - **`SYNC_TABLE` ganhou `nome`/`tamanho`/`n_chunks` opcionais por entry**
   (extensão consciente do Listing 7.2, refletida no `main.tex`, decidida
   com o usuário): sem os metadados, um tracker que conhece o hash apenas

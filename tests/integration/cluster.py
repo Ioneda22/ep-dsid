@@ -21,6 +21,7 @@ import uvicorn
 from src.tracker.api import create_app
 from src.tracker.index import Index
 from src.tracker.persistence import TrackerDB, init_db
+from src.tracker.rebalance import RebalanceManager
 from src.tracker.routing import SearchRouter
 from src.tracker.sync_client import KnownTracker, SyncClient
 from src.tracker.sync_server import SyncServer
@@ -55,6 +56,8 @@ class TrackerNode:
     sync_client: SyncClient | None
     search_router: SearchRouter
     api_url: str
+    api_port: int
+    rebalance: RebalanceManager | None
     _uvicorn: uvicorn.Server
     _thread: threading.Thread
     _db: TrackerDB
@@ -99,6 +102,11 @@ def cluster_de_trackers(
         assert servidor.started.wait(timeout=5), f"sync server de {tid} não subiu"
         sync_servers[tid] = servidor
 
+    # Portas de API escolhidas antes do loop: assim o mapa tracker_id -> (ip,
+    # api_port) do rebalance já conhece o endereço REST de todos os trackers.
+    api_ports = {tid: porta_livre() for tid in ids}
+    api_map = {tid: ("127.0.0.1", api_ports[tid]) for tid in ids}
+
     nodes: dict[str, TrackerNode] = {}
     try:
         for tid in ids:
@@ -115,11 +123,17 @@ def cluster_de_trackers(
             # Habilita o servidor a disparar SYNC_PULL na detecção de lacuna e a
             # responder TRACKER_REJOIN (o cluster resolve portas antes dos clients).
             sync_servers[tid].sync_client = sync_client
+            rebalance = (
+                RebalanceManager(tid, indices[tid], sync_client, api_map)
+                if sync_client is not None
+                else None
+            )
+            sync_servers[tid].rebalance = rebalance
             router = SearchRouter(
                 tid, conhecidos, indices[tid], timeout_seconds=search_timeout
             )
             db = init_db(tmp_path / f"{tid}.db")
-            api_port = porta_livre()
+            api_port = api_ports[tid]
             app = create_app(
                 index=indices[tid],
                 db=db,
@@ -136,6 +150,8 @@ def cluster_de_trackers(
                 sync_client=sync_client,
                 search_router=router,
                 api_url=f"http://127.0.0.1:{api_port}",
+                api_port=api_port,
+                rebalance=rebalance,
                 _uvicorn=server,
                 _thread=thread,
                 _db=db,

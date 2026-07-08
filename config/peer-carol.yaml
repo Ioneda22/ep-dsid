@@ -1,0 +1,17 @@
+# Configuração do peer carol (§7.6 do CLAUDE.md)
+nome_peer: carol
+ip: 127.0.0.1
+porta: 7003                # TCP server para chunks (peer-peer)
+storage_dir: data/peer-carol
+log_path: logs/peer-carol.log
+log_level: INFO
+trackers:
+  - { tracker_id: tracker-1, ip: 127.0.0.1, api_port: 8001 }
+  - { tracker_id: tracker-2, ip: 127.0.0.1, api_port: 8002 }
+  - { tracker_id: tracker-3, ip: 127.0.0.1, api_port: 8003 }
+
+# Constantes operacionais
+chunk_size_bytes: 262144           # 256 KB
+seed_report_interval_seconds: 180  # 3 min
+chunk_request_timeout_seconds: 10
+download_pool_size: 8

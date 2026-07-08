@@ -31,8 +31,10 @@ from src.common.config import load_yaml, require_keys
 from src.common.logging_config import setup_logging
 from src.tracker.anti_entropy import DigestBroadcaster
 from src.tracker.api import create_app
+from src.tracker.failure_detector import FailureDetector
 from src.tracker.index import Index
 from src.tracker.persistence import init_db
+from src.tracker.rebalance import RebalanceManager
 from src.tracker.routing import SearchRouter
 from src.tracker.sync_client import KnownTracker, SyncClient
 from src.tracker.sync_server import SyncServer
@@ -113,6 +115,24 @@ def _trackers_conhecidos(settings: TrackerSettings) -> list[dict[str, Any]]:
     return [proprio, *settings.known_trackers]
 
 
+def _api_por_tracker_id(settings: TrackerSettings) -> dict[str, tuple[str, int]]:
+    """Mapa ``tracker_id -> (ip, api_port)`` para o rebalance apontar peers (§6.5).
+
+    Inclui este tracker e os ``known_trackers`` do YAML que declararem ``api_port``
+    (necessário para dizer ao peer cedido onde se reportar via REST).
+    """
+    mapa: dict[str, tuple[str, int]] = {
+        settings.tracker_id: (settings.ip, settings.api_port)
+    }
+    for entrada in settings.known_trackers:
+        if "api_port" in entrada:
+            mapa[str(entrada["tracker_id"])] = (
+                str(entrada["ip"]),
+                int(entrada["api_port"]),
+            )
+    return mapa
+
+
 def _known_trackers_sync(settings: TrackerSettings) -> list[KnownTracker]:
     """Converte os ``known_trackers`` do YAML em destinos de sincronização.
 
@@ -169,12 +189,19 @@ def main(argv: list[str] | None = None) -> None:
         index=index,
         timeout_seconds=settings.search_forward_timeout_seconds,
     )
+    rebalance = RebalanceManager(
+        tracker_id=settings.tracker_id,
+        index=index,
+        sync_client=sync_client,
+        api_por_tracker_id=_api_por_tracker_id(settings),
+    )
     sync_server = SyncServer(
         tracker_id=settings.tracker_id,
         ip=settings.ip,
         sync_port=settings.sync_port,
         index=index,
         sync_client=sync_client,
+        rebalance=rebalance,
     )
     sync_server.start()
     reaper = TombstoneReaper(
@@ -183,6 +210,13 @@ def main(argv: list[str] | None = None) -> None:
         retention_seconds=settings.tombstone_retention_seconds,
     )
     reaper.start()
+    failure_detector = FailureDetector(
+        tracker_id=settings.tracker_id,
+        index=index,
+        sync_client=sync_client,
+        seed_report_timeout_seconds=settings.seed_report_timeout_seconds,
+    )
+    failure_detector.start()
     broadcaster = DigestBroadcaster(
         tracker_id=settings.tracker_id,
         index=index,
@@ -214,6 +248,7 @@ def main(argv: list[str] | None = None) -> None:
         uvicorn.run(app, host=settings.ip, port=settings.api_port, log_config=None)
     finally:
         broadcaster.stop()
+        failure_detector.stop()
         reaper.stop()
         sync_server.stop()
 

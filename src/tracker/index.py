@@ -103,6 +103,23 @@ class IndexSnapshot:
     tombstones: dict[str, dict[str, TombstoneEntry]]
 
 
+@dataclass
+class LocalDelta:
+    """Entradas de UM evento local (mesmo ``seq`` e ``timestamp``) prontas para flooding.
+
+    Um evento — reconciliação de ``SEED_REPORT``, saída ordenada (``PEER_LEAVE``)
+    ou detecção de falha — pode tocar vários pares (hash, peer), mas consome um
+    único ``seq`` e um único ``timestamp``. Esse timestamp compartilhado é
+    obrigatório: a ``SYNC_TABLE`` de propagação o carrega no nível da mensagem,
+    então TODAS as entradas gravadas localmente precisam do MESMO valor, ou o LWW
+    divergiria entre réplicas (main.tex §11.3).
+    """
+
+    seq: int
+    timestamp: float
+    entries: list[SyncTableEntry]
+
+
 class Index:
     """Estado em memória do tracker, protegido por um único ``threading.Lock``.
 
@@ -132,6 +149,10 @@ class Index:
         # resposta do SYNC_PULL (fecha quando a resposta chega).
         self._visto: dict[str, int] = {}
         self._pendencias: dict[str, int] = {}
+        # Rebalance (Fase 5): peers locais agendados para migrar a outro tracker.
+        # nome_peer -> (novo_ip, nova_api_port); entregue ao peer como campo
+        # 'reassign_to' na resposta REST da sua próxima chamada (main.tex §12.4).
+        self._reassign_pendente: dict[str, tuple[str, int]] = {}
 
     # ------------------------------------------------------------------
     # Presença de peers
@@ -149,8 +170,13 @@ class Index:
                 ip=ip, porta=porta, last_seed_ts=self._clock()
             )
 
-    def remove_peer(self, nome_peer: str) -> None:
+    def remove_peer(self, nome_peer: str) -> LocalDelta | None:
         """Saída ordenada (``PEER_LEAVE``): some o endereço e tombstona tudo.
+
+        Returns:
+            O ``LocalDelta`` com os tombstones gerados (um só ``seq``/``timestamp``)
+            para o chamador propagar via ``SYNC_TABLE``, ou ``None`` se o peer não
+            era fonte de nenhum arquivo.
 
         Raises:
             PeerUnknownError: Se o peer não estiver registrado.
@@ -161,11 +187,16 @@ class Index:
             hashes = [
                 h for h, fontes in self.hash_to_peers.items() if nome_peer in fontes
             ]
-            if hashes:
-                # Um unico evento (uma saida) -> um seq compartilhado.
-                seq = self._proximo_seq_local_locked()
-                for hash_arquivo in hashes:
-                    self._tombstone_locked(hash_arquivo, nome_peer, seq=seq)
+            if not hashes:
+                return None
+            # Um unico evento (uma saida) -> um seq e um timestamp compartilhados.
+            ts = self._clock()
+            seq = self._proximo_seq_local_locked()
+            entries = [
+                self._tombstonar_para_delta_locked(h, nome_peer, seq=seq, timestamp=ts)
+                for h in hashes
+            ]
+            return LocalDelta(seq=seq, timestamp=ts, entries=entries)
 
     def update_peer_address(self, nome_peer: str, novo_ip: str, porta: int) -> None:
         """Aplica ``UPDATE_IP``: novo endereço refletido em todas as fontes.
@@ -244,7 +275,7 @@ class Index:
             self._tombstone_locked(hash_arquivo, nome_peer, seq=seq)
             return copy.copy(self.tombstones[hash_arquivo][nome_peer])
 
-    def apply_seed_hashes(self, nome_peer: str, hashes: set[str]) -> None:
+    def apply_seed_hashes(self, nome_peer: str, hashes: set[str]) -> LocalDelta | None:
         """Anti-entropy do ``SEED_REPORT``: hash omitido equivale a remoção.
 
         Hashes reportados que o índice já conhece (metadata presente) ganham
@@ -255,6 +286,12 @@ class Index:
         Um relatório sem mudanças (estado estacionário) não consome ``seq`` —
         só uma reconciliação que de fato altera o índice avança ``meu_seq``,
         evitando churn no vetor de versões a cada 3 minutos.
+
+        Returns:
+            O ``LocalDelta`` com as entradas alteradas (registros com metadados
+            e/ou tombstones, sob um só ``seq``/``timestamp``) para o chamador
+            propagar via ``SYNC_TABLE``, ou ``None`` se nada mudou. A detecção
+            por ``seq``/digest é backstop caso a propagação se perca.
 
         Raises:
             PeerUnknownError: Se o peer não estiver registrado.
@@ -271,15 +308,94 @@ class Index:
             }
             removidas = atuais - hashes
             if not novas and not removidas:
-                return
-            # Uma reconciliacao (um SEED_REPORT) -> um seq compartilhado.
+                return None
+            # Uma reconciliacao (um SEED_REPORT) -> um seq e um timestamp.
+            ts = self._clock()
             seq = self._proximo_seq_local_locked()
+            entries: list[SyncTableEntry] = []
             for hash_arquivo in novas:
                 self._registrar_fonte_locked(
-                    hash_arquivo, nome_peer, endereco, refresh=False, seq=seq
+                    hash_arquivo,
+                    nome_peer,
+                    endereco,
+                    refresh=False,
+                    seq=seq,
+                    timestamp=ts,
+                )
+                meta = self.hash_to_metadata[hash_arquivo]
+                entries.append(
+                    SyncTableEntry(
+                        hash=hash_arquivo,
+                        nome_peer=nome_peer,
+                        ip=endereco.ip,
+                        porta=endereco.porta,
+                        ativo=True,
+                        nome=meta.nome,
+                        tamanho=meta.tamanho,
+                        n_chunks=meta.n_chunks,
+                    )
                 )
             for hash_arquivo in removidas:
-                self._tombstone_locked(hash_arquivo, nome_peer, seq=seq)
+                entries.append(
+                    self._tombstonar_para_delta_locked(
+                        hash_arquivo, nome_peer, seq=seq, timestamp=ts
+                    )
+                )
+            return LocalDelta(seq=seq, timestamp=ts, entries=entries)
+
+    # ------------------------------------------------------------------
+    # Detecção de falha de peer e rebalance (Fase 5)
+    # ------------------------------------------------------------------
+
+    def detectar_peers_falhos(
+        self, timeout_seconds: float
+    ) -> list[tuple[str, LocalDelta | None]]:
+        """Tombstona peers sem ``SEED_REPORT`` há mais de ``timeout_seconds`` (§6.3).
+
+        Um peer cujo ``last_seed_ts`` é mais antigo que ``clock() -
+        timeout_seconds`` (default 360s = 2 rodadas) é considerado falho: sai de
+        ``nome_peer_to_endereco`` e todas as suas fontes viram tombstone, sob um
+        único ``seq``/``timestamp`` (um evento por peer). Chamado pela thread de
+        ``src.tracker.failure_detector``.
+
+        Returns:
+            Uma tupla ``(nome_peer, delta)`` por peer considerado falho: ``delta``
+            traz os tombstones a propagar, ou ``None`` se o peer não era fonte de
+            nenhum arquivo (apenas presença expirada).
+        """
+        with self._lock:
+            limite = self._clock() - timeout_seconds
+            falhos = [
+                nome
+                for nome, endereco in self.nome_peer_to_endereco.items()
+                if endereco.last_seed_ts < limite
+            ]
+            resultado: list[tuple[str, LocalDelta | None]] = []
+            for nome_peer in falhos:
+                del self.nome_peer_to_endereco[nome_peer]
+                resultado.append((nome_peer, self._tombstonar_peer_locked(nome_peer)))
+            return resultado
+
+    def listar_peers_locais(self) -> list[str]:
+        """Nomes dos peers com presença ativa neste tracker (base do rebalance)."""
+        with self._lock:
+            return sorted(self.nome_peer_to_endereco)
+
+    def agendar_reassign(
+        self, nome_peer: str, novo_ip: str, nova_api_port: int
+    ) -> None:
+        """Agenda a migração de ``nome_peer`` para outro tracker (rebalance, §6.5).
+
+        A migração é entregue ao peer como ``reassign_to`` na resposta da sua
+        próxima chamada REST (simplificação aceita: sem push TCP ao peer).
+        """
+        with self._lock:
+            self._reassign_pendente[nome_peer] = (novo_ip, nova_api_port)
+
+    def consumir_reassign(self, nome_peer: str) -> tuple[str, int] | None:
+        """Retira (uma única vez) a migração pendente de ``nome_peer``, se houver."""
+        with self._lock:
+            return self._reassign_pendente.pop(nome_peer, None)
 
     # ------------------------------------------------------------------
     # Consultas
@@ -548,13 +664,16 @@ class Index:
         *,
         refresh: bool,
         seq: int,
+        timestamp: float | None = None,
     ) -> None:
         """Adiciona o peer como fonte; ``refresh=False`` preserva o timestamp.
 
         REGISTER_FILE explícito usa ``refresh=True`` (evento novo para LWW);
         o anti-entropy do SEED_REPORT usa ``refresh=False`` para não gerar
         churn de timestamp a cada 3 minutos. ``seq`` é a proveniência local
-        já alocada pelo chamador (um por evento).
+        já alocada pelo chamador (um por evento); ``timestamp``, quando dado,
+        garante que todas as entradas de um mesmo evento compartilhem o valor
+        que viajará na ``SYNC_TABLE`` (LWW convergente entre réplicas).
         """
         fontes = self.hash_to_peers.setdefault(hash_arquivo, {})
         if not refresh and nome_peer in fontes:
@@ -564,13 +683,19 @@ class Index:
             ip=endereco.ip,
             porta=endereco.porta,
             ativo=True,
-            timestamp=self._clock(),
+            timestamp=self._clock() if timestamp is None else timestamp,
             origem=self._tracker_id,
             seq=seq,
         )
         self._descartar_tombstone_locked(hash_arquivo, nome_peer)
 
-    def _tombstone_locked(self, hash_arquivo: str, nome_peer: str, seq: int) -> None:
+    def _tombstone_locked(
+        self,
+        hash_arquivo: str,
+        nome_peer: str,
+        seq: int,
+        timestamp: float | None = None,
+    ) -> None:
         entry = self.hash_to_peers.get(hash_arquivo, {}).pop(nome_peer, None)
         if entry is None:
             raise NotFoundError(
@@ -580,10 +705,41 @@ class Index:
             nome_peer=nome_peer,
             ip=entry.ip,
             porta=entry.porta,
-            timestamp=self._clock(),
+            timestamp=self._clock() if timestamp is None else timestamp,
             origem=self._tracker_id,
             seq=seq,
         )
+
+    def _tombstonar_para_delta_locked(
+        self, hash_arquivo: str, nome_peer: str, *, seq: int, timestamp: float
+    ) -> SyncTableEntry:
+        """Tombstona (hash, peer) e devolve a ``SyncTableEntry`` (ativo=False).
+
+        Reúne o tombstone e a entrada de propagação num passo, para eventos
+        multi-hash montarem seu :class:`LocalDelta` sem reconsultar a tabela.
+        """
+        self._tombstone_locked(hash_arquivo, nome_peer, seq=seq, timestamp=timestamp)
+        tomb = self.tombstones[hash_arquivo][nome_peer]
+        return SyncTableEntry(
+            hash=hash_arquivo,
+            nome_peer=nome_peer,
+            ip=tomb.ip,
+            porta=tomb.porta,
+            ativo=False,
+        )
+
+    def _tombstonar_peer_locked(self, nome_peer: str) -> LocalDelta | None:
+        """Tombstona todas as fontes de ``nome_peer`` sob um só ``seq``/``timestamp``."""
+        hashes = [h for h, fontes in self.hash_to_peers.items() if nome_peer in fontes]
+        if not hashes:
+            return None
+        ts = self._clock()
+        seq = self._proximo_seq_local_locked()
+        entries = [
+            self._tombstonar_para_delta_locked(h, nome_peer, seq=seq, timestamp=ts)
+            for h in hashes
+        ]
+        return LocalDelta(seq=seq, timestamp=ts, entries=entries)
 
     def _atualizar_fontes_locked(self, nome_peer: str, ip: str, porta: int) -> None:
         agora = self._clock()

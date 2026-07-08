@@ -1,35 +1,38 @@
-"""Orquestrador de download — SEQUENCIAL na Fase 3 (§9; paralelo na Fase 5).
+"""Orquestrador de download PARALELO entre múltiplas fontes (§7.4 do CLAUDE.md).
 
-Fluxo (§7.4 do CLAUDE.md):
+Fluxo (substitui o sequencial da Fase 3):
 
 1. ``SEARCH_FILE`` no tracker (busca por nome — o tracker resolve
-   nome → hash → peers, main.tex "Mecanismo de Resolução de Nomes").
-   O ``SEARCH_RESULT`` traz o ``n_chunks`` de cada hash (Listing 7.2).
-2. ``CHUNK_LIST_REQUEST`` a cada peer fonte.
-3. Baixa chunk por chunk, em ordem; qualquer fonte que tenha o chunk
-   serve; em falha tenta a próxima fonte. Se todas falharem, retenta o
-   chunk após um pequeno intervalo, até ``max_tentativas``.
-4. Monta o arquivo, valida o SHA-256 e re-registra com ``REGISTER_FILE``.
+   nome → hash → peers). O ``SEARCH_RESULT`` traz o ``n_chunks`` de cada hash.
+2. ``CHUNK_LIST_REQUEST`` a cada fonte EM PARALELO → mapa
+   ``chunk_index → [fontes que têm]``.
+3. Plano de download: para cada chunk faltante, escolhe como fonte primária a
+   que tem MENOS chunks já atribuídos (balanceamento rarest-first simplificado),
+   guardando as demais como fallback.
+4. ``ThreadPoolExecutor`` com ``download_pool_size`` workers baixa os chunks;
+   cada worker tenta a primária e, em falha, as outras fontes que têm o chunk.
+5. Timeout por ``CHUNK_REQUEST`` = ``chunk_request_timeout_seconds`` (no cliente).
+6. Chunk sem nenhuma fonte que sirva → o download falha (sem retransmissão).
+7. Ao completar: ``assemble_file`` valida o SHA-256 e re-registra via
+   ``REGISTER_FILE``.
 
-Retomada: em falha de download os chunks já gravados são MANTIDOS no
-disco. Uma nova tentativa reconcilia o progresso a partir do disco
-(``storage.has_chunk``) — não da memória — e baixa apenas o que falta,
-mesmo após reinício do processo.
+Retomada: chunks já no disco (``storage.has_chunk``) são reconciliados a partir
+do disco antes do pool — o download baixa só o que falta, mesmo após reinício.
 """
 
 from __future__ import annotations
 
 import logging
-import time
 import uuid
-from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
 from typing import TYPE_CHECKING
 
 from src.common.errors import InvalidHashError
-from src.common.messages import SearchResultEntry, SearchResultPeer
+from src.peer.tracker_client import TodosTrackersIndisponiveis
 
 if TYPE_CHECKING:
+    from src.common.messages import SearchResultEntry, SearchResultPeer
     from src.peer.chunk_manager import ChunkManager
     from src.peer.storage import Storage
     from src.peer.tcp_client import PeerTCPClient
@@ -37,12 +40,16 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-#: Mapa fonte → chunks anunciados: ``(ip, porta) -> [indices]``.
-ChunksPorFonte = dict[tuple[str, int], list[int]]
+#: Endereço de uma fonte: ``(ip, porta)``.
+Fonte = tuple[str, int]
+#: Mapa fonte → chunks anunciados.
+ChunksPorFonte = dict[Fonte, list[int]]
+#: Plano de download: ``chunk_index -> fontes ordenadas (primária primeiro)``.
+PlanoDownload = dict[int, list[Fonte]]
 
 
 class Downloader:
-    """Coordena busca, transferência sequencial, retomada e re-registro."""
+    """Coordena busca, download paralelo entre fontes, retomada e re-registro."""
 
     def __init__(
         self,
@@ -51,39 +58,32 @@ class Downloader:
         tcp_client: PeerTCPClient,
         storage: Storage,
         chunk_manager: ChunkManager,
-        max_tentativas: int = 3,
-        retry_delay_seconds: float = 1.0,
-        sleep: Callable[[float], None] = time.sleep,
+        download_pool_size: int = 8,
     ) -> None:
         """Recebe todas as dependências por parâmetro (§14.4).
 
         Args:
             nome_peer: Nome deste peer (excluído das fontes; re-registro).
-            tracker_client: Cliente REST do tracker.
-            tcp_client: Cliente TCP peer↔peer.
+            tracker_client: Cliente REST do tracker (com fallback).
+            tcp_client: Cliente TCP peer↔peer (thread-safe).
             storage: Armazenamento local de chunks/arquivos.
-            chunk_manager: Rastreador de progresso em memória.
-            max_tentativas: Tentativas por chunk quando todas as fontes
-                falham (cada tentativa percorre todas as fontes de novo).
-            retry_delay_seconds: Espera entre tentativas de um mesmo chunk.
-            sleep: Função de espera, injetável em testes (§10).
+            chunk_manager: Rastreador de progresso.
+            download_pool_size: Nº de workers do pool de download (§7.6: 8).
         """
         self.nome_peer = nome_peer
         self.tracker_client = tracker_client
         self.tcp_client = tcp_client
         self.storage = storage
         self.chunk_manager = chunk_manager
-        self.max_tentativas = max_tentativas
-        self.retry_delay_seconds = retry_delay_seconds
-        self._sleep = sleep
+        self.download_pool_size = download_pool_size
 
     def download_file(self, hash_arquivo: str, nome_musica: str) -> Path | None:
         """Baixa ``hash_arquivo`` e devolve o caminho do arquivo montado.
 
         Args:
             hash_arquivo: Hash SHA-256 escolhido pelo usuário.
-            nome_musica: Nome legível associado (vindo da busca anterior),
-                usado para refazer o ``SEARCH_FILE`` e obter fontes frescas.
+            nome_musica: Nome legível associado (da busca anterior), usado para
+                refazer o ``SEARCH_FILE`` e obter fontes frescas.
 
         Returns:
             Caminho do arquivo completo, ou ``None`` em falha (já logada).
@@ -107,27 +107,36 @@ class Downloader:
             logger.error("nenhuma fonte respondeu CHUNK_LIST para %s", hash_arquivo)
             return None
 
+        self._reconciliar_progresso(hash_arquivo, entrada.n_chunks)
+        faltantes = self.chunk_manager.missing_chunks(hash_arquivo, entrada.n_chunks)
+        plano = self._planejar(faltantes, chunks_por_fonte)
+        if plano is None:
+            return None  # algum chunk sem fonte que o tenha
+
         logger.info(
-            "download de %s: %d chunks, %d fontes",
+            "download paralelo de %s: %d chunk(s) faltando, %d fonte(s), pool=%d",
             hash_arquivo,
-            entrada.n_chunks,
-            len(fontes),
+            len(faltantes),
+            len(chunks_por_fonte),
+            self.download_pool_size,
         )
-        if not self._baixar_sequencial(
-            hash_arquivo, entrada.n_chunks, chunks_por_fonte
-        ):
+        if not self._baixar_paralelo(hash_arquivo, plano):
             return None
         return self._finalizar(hash_arquivo, entrada.n_chunks)
 
     # ------------------------------------------------------------------
-    # Etapas
+    # Busca e descoberta de chunks
     # ------------------------------------------------------------------
 
     def _buscar_entrada(
         self, hash_arquivo: str, nome_musica: str
     ) -> SearchResultEntry | None:
         """SEARCH_FILE no tracker; seleciona a entrada do hash pedido."""
-        resultado = self.tracker_client.search_file(nome_musica, str(uuid.uuid4()))
+        try:
+            resultado = self.tracker_client.search_file(nome_musica, str(uuid.uuid4()))
+        except TodosTrackersIndisponiveis:
+            logger.error("busca falhou: todos os trackers indisponíveis")
+            return None
         if resultado is None:
             logger.error("busca falhou no tracker (query=%r)", nome_musica)
             return None
@@ -142,29 +151,24 @@ class Downloader:
     def _consultar_chunk_lists(
         self, hash_arquivo: str, fontes: list[SearchResultPeer]
     ) -> ChunksPorFonte:
-        """CHUNK_LIST_REQUEST a cada fonte; ignora as sem chunks/sem resposta."""
+        """CHUNK_LIST_REQUEST a cada fonte EM PARALELO; ignora as sem chunks."""
         chunks_por_fonte: ChunksPorFonte = {}
-        for fonte in fontes:
+
+        def consultar(fonte: SearchResultPeer) -> tuple[Fonte, list[int] | None]:
             indices = self.tcp_client.request_chunk_list(
                 fonte.ip, fonte.porta, hash_arquivo
             )
-            if indices:
-                chunks_por_fonte[(fonte.ip, fonte.porta)] = indices
-                logger.info(
-                    "fonte %s (%s:%d) tem %d chunks",
-                    fonte.nome_peer,
-                    fonte.ip,
-                    fonte.porta,
-                    len(indices),
-                )
+            return (fonte.ip, fonte.porta), indices
+
+        with ThreadPoolExecutor(max_workers=max(1, len(fontes))) as executor:
+            for (ip, porta), indices in executor.map(consultar, fontes):
+                if indices:
+                    chunks_por_fonte[(ip, porta)] = indices
+                    logger.info("fonte %s:%d tem %d chunk(s)", ip, porta, len(indices))
         return chunks_por_fonte
 
     def _reconciliar_progresso(self, hash_arquivo: str, n_chunks: int) -> None:
-        """Marca como recebidos os chunks que já estão no disco (retomada).
-
-        A fonte de verdade do progresso é o disco, não a memória: assim a
-        retomada funciona inclusive após reinício do processo.
-        """
+        """Marca como recebidos os chunks já no disco (retomada, fonte = disco)."""
         self.chunk_manager.start_download(hash_arquivo, n_chunks)
         recuperados = 0
         for i in range(n_chunks):
@@ -179,74 +183,98 @@ class Downloader:
                 n_chunks,
             )
 
-    def _baixar_sequencial(
-        self, hash_arquivo: str, n_chunks: int, chunks_por_fonte: ChunksPorFonte
-    ) -> bool:
-        """Baixa os chunks faltantes em ordem, um por vez (Fase 3)."""
-        self._reconciliar_progresso(hash_arquivo, n_chunks)
-        for chunk_index in self.chunk_manager.missing_chunks(hash_arquivo, n_chunks):
-            if not self._baixar_chunk_com_retry(
-                hash_arquivo, chunk_index, chunks_por_fonte
-            ):
-                # Chunks já gravados ficam no disco para retomada futura.
+    # ------------------------------------------------------------------
+    # Plano e download paralelo
+    # ------------------------------------------------------------------
+
+    def _planejar(
+        self, faltantes: list[int], chunks_por_fonte: ChunksPorFonte
+    ) -> PlanoDownload | None:
+        """Atribui cada chunk faltante à fonte menos carregada (rarest-first).
+
+        Chunks mais raros (menos fontes) são atribuídos primeiro, para não gastar
+        a única fonte de um chunk raro com um chunk que outras também têm. A fonte
+        primária de cada chunk é a de menor carga atual; as demais viram fallback.
+
+        Returns:
+            O plano, ou ``None`` se algum chunk não tem nenhuma fonte que o sirva.
+        """
+        fontes_do_chunk = {
+            chunk: [f for f, indices in chunks_por_fonte.items() if chunk in indices]
+            for chunk in faltantes
+        }
+        atribuidos: dict[Fonte, int] = {fonte: 0 for fonte in chunks_por_fonte}
+        plano: PlanoDownload = {}
+        for chunk in sorted(faltantes, key=lambda c: len(fontes_do_chunk[c])):
+            candidatos = fontes_do_chunk[chunk]
+            if not candidatos:
                 logger.error(
-                    "chunk %d de %s esgotou %d tentativas; download abortado "
-                    "(progresso mantido para retomada)",
-                    chunk_index,
-                    hash_arquivo,
-                    self.max_tentativas,
+                    "chunk %d não está em nenhuma fonte; download impossível", chunk
                 )
-                return False
+                return None
+            primaria = min(candidatos, key=lambda f: atribuidos[f])
+            atribuidos[primaria] += 1
+            plano[chunk] = [primaria, *(f for f in candidatos if f != primaria)]
+        return plano
+
+    def _baixar_paralelo(self, hash_arquivo: str, plano: PlanoDownload) -> bool:
+        """Baixa os chunks do plano com um pool de ``download_pool_size`` workers."""
+        with ThreadPoolExecutor(max_workers=self.download_pool_size) as executor:
+            futuros = {
+                executor.submit(self._baixar_chunk, hash_arquivo, chunk, fontes): chunk
+                for chunk, fontes in plano.items()
+            }
+            for futuro in futuros:
+                if not futuro.result():
+                    logger.error(
+                        "chunk %d de %s falhou em todas as fontes; download abortado "
+                        "(progresso mantido para retomada)",
+                        futuros[futuro],
+                        hash_arquivo,
+                    )
+                    return False
         return True
 
-    def _baixar_chunk_com_retry(
-        self, hash_arquivo: str, chunk_index: int, chunks_por_fonte: ChunksPorFonte
-    ) -> bool:
-        """Retenta o chunk após pequena espera quando todas as fontes falham."""
-        for tentativa in range(1, self.max_tentativas + 1):
-            if self._baixar_chunk(hash_arquivo, chunk_index, chunks_por_fonte):
-                return True
-            if tentativa < self.max_tentativas:
-                logger.warning(
-                    "chunk %d de %s falhou (tentativa %d/%d); aguardando %.1fs",
-                    chunk_index,
-                    hash_arquivo,
-                    tentativa,
-                    self.max_tentativas,
-                    self.retry_delay_seconds,
-                )
-                self._sleep(self.retry_delay_seconds)
-        return False
-
     def _baixar_chunk(
-        self, hash_arquivo: str, chunk_index: int, chunks_por_fonte: ChunksPorFonte
+        self, hash_arquivo: str, chunk_index: int, fontes: list[Fonte]
     ) -> bool:
-        """Tenta cada fonte que anunciou o chunk até uma servir (§7.4)."""
-        for (ip, porta), indices in chunks_por_fonte.items():
-            if chunk_index not in indices:
-                continue
+        """Baixa um chunk tentando cada fonte em ordem até uma servir (§7.4)."""
+        for ip, porta in fontes:
             dados = self.tcp_client.download_chunk(ip, porta, hash_arquivo, chunk_index)
             if dados is None:
                 continue
             self.storage.save_chunk(hash_arquivo, chunk_index, dados)
             self.chunk_manager.mark_received(hash_arquivo, chunk_index)
+            logger.debug(
+                "chunk %d de %s baixado de %s:%d", chunk_index, hash_arquivo, ip, porta
+            )
             return True
         return False
+
+    # ------------------------------------------------------------------
+    # Finalização
+    # ------------------------------------------------------------------
 
     def _finalizar(self, hash_arquivo: str, n_chunks: int) -> Path | None:
         """Monta + valida SHA-256; re-registra no tracker como nova fonte."""
         try:
             caminho = self.storage.assemble_file(hash_arquivo, n_chunks)
         except (FileNotFoundError, InvalidHashError):
-            # Conteúdo corrompido: aqui sim descarta tudo (§7.4 passo 6) —
-            # reter chunks que não batem com o hash não permite retomada.
+            # Conteúdo corrompido: descarta tudo (§7.4 passo 6) — reter chunks que
+            # não batem com o hash não permite retomada.
             logger.exception("validação falhou para %s; descartando", hash_arquivo)
             self.storage.remove_file(hash_arquivo)
             self.chunk_manager.reset(hash_arquivo)
             return None
 
         self.chunk_manager.reset(hash_arquivo)
-        if self.tracker_client.register_file(self.nome_peer, hash_arquivo) is None:
+        try:
+            re_registro = self.tracker_client.register_file(
+                self.nome_peer, hash_arquivo
+            )
+        except TodosTrackersIndisponiveis:
+            re_registro = None
+        if re_registro is None:
             logger.warning(
                 "re-registro de %s falhou; arquivo local mantido", hash_arquivo
             )

@@ -1,11 +1,18 @@
-"""Cliente REST do peer para o tracker.
+"""Cliente REST do peer para o tracker, com fallback completo (§7.5).
 
-Fase 3: SEM fallback — usa apenas o primeiro tracker da lista ``trackers``
-do YAML. O fallback completo (timeout/ConnectionRefused → próximo da
-lista, §7.5) chega na Fase 5.
+O peer mantém a lista ordenada ``trackers`` do YAML e um ``current_tracker_index``
+que NÃO reseta a cada chamada. Em timeout/ConnectionRefused do tracker atual, o
+cliente avança para o próximo da lista (e, por ser uma troca de tracker, reenvia
+``PEER_HELLO`` ao novo antes de retomar a operação). Se TODOS falharem, levanta
+:class:`TodosTrackersIndisponiveis` — a CLI mostra o erro ao usuário.
 
-Erros de comunicação não sobem como exceção: cada método loga e retorna
-``None``, deixando a CLI decidir a mensagem ao usuário.
+Rebalance (main.tex §12.4): quando a resposta de uma chamada traz ``reassign_to``,
+o cliente migra para o tracker indicado (adicionando-o à lista se necessário) e se
+reapresenta lá — simplificação aceita para entregar o ``REASSIGN_TRACKER`` sobre
+REST, sem um canal push tracker→peer.
+
+Erros que NÃO são de conectividade (HTTP 4xx/5xx) continuam retornando ``None``:
+cada método loga e devolve ``None``, deixando a camada acima decidir a mensagem.
 """
 
 from __future__ import annotations
@@ -29,16 +36,19 @@ from src.common.messages import (
 logger = logging.getLogger(__name__)
 
 
+class TodosTrackersIndisponiveis(Exception):
+    """Nenhum tracker da lista de fallback respondeu (§7.5)."""
+
+
 class PeerTrackerClient:
-    """Cliente HTTP síncrono do peer para a API REST do tracker."""
+    """Cliente HTTP síncrono do peer para a API REST do tracker, com fallback."""
 
     def __init__(self, trackers: list[dict[str, Any]], timeout: float = 10.0) -> None:
         """Inicializa o cliente apontando para o primeiro tracker da lista.
 
         Args:
             trackers: Lista ``trackers`` do YAML do peer; cada item tem
-                ``tracker_id``, ``ip`` e ``api_port``. Apenas o primeiro
-                é usado nesta fase.
+                ``tracker_id``, ``ip`` e ``api_port``.
             timeout: Timeout em segundos para cada requisição.
 
         Raises:
@@ -46,21 +56,34 @@ class PeerTrackerClient:
         """
         if not trackers:
             raise ValueError("lista de trackers vazia; esperado ao menos um")
-        primeiro = trackers[0]
-        base_url = f"http://{primeiro['ip']}:{primeiro['api_port']}"
-        self.tracker_id = str(primeiro.get("tracker_id", base_url))
-        self._http = httpx.Client(base_url=base_url, timeout=timeout)
+        self._trackers: list[dict[str, Any]] = [dict(t) for t in trackers]
+        self.timeout = timeout
+        self.current_tracker_index = 0
+        self._clientes: dict[int, httpx.Client] = {}
+        # Identidade guardada no primeiro PEER_HELLO, para reapresentar o peer
+        # ao trocar de tracker (fallback ou reassign) sem intervenção externa.
+        self._identidade: tuple[str, str, int] | None = None
+        self._reassignando = False
+
+    @property
+    def tracker_id(self) -> str:
+        """``tracker_id`` do tracker atualmente em uso."""
+        atual = self._trackers[self.current_tracker_index]
+        return str(atual.get("tracker_id", self._base_url(self.current_tracker_index)))
 
     def close(self) -> None:
-        """Encerra a sessão HTTP subjacente."""
-        self._http.close()
+        """Encerra todas as sessões HTTP abertas."""
+        for cliente in self._clientes.values():
+            cliente.close()
+        self._clientes.clear()
 
     # ------------------------------------------------------------------
     # Presença
     # ------------------------------------------------------------------
 
     def peer_hello(self, nome_peer: str, ip: str, porta: int) -> dict[str, Any] | None:
-        """Envia ``PEER_HELLO`` (apresentação inicial, §7.2 do main.tex)."""
+        """Envia ``PEER_HELLO`` e memoriza a identidade para futuros fallbacks."""
+        self._identidade = (nome_peer, ip, porta)
         corpo = PeerHello(nome_peer=nome_peer, ip=ip, porta=porta)
         return self._post("/peers/hello", corpo.model_dump())
 
@@ -88,11 +111,7 @@ class PeerTrackerClient:
         tamanho: int | None = None,
         n_chunks: int | None = None,
     ) -> dict[str, Any] | None:
-        """Envia ``REGISTER_FILE`` (upload original ou re-registro).
-
-        No re-registro pós-download, ``nome``/``tamanho``/``n_chunks``
-        ficam ``None`` — o tracker já os conhece (main.tex §7.2).
-        """
+        """Envia ``REGISTER_FILE`` (upload original ou re-registro)."""
         corpo = RegisterFile(
             nome_peer=nome_peer,
             hash=hash_arquivo,
@@ -103,12 +122,7 @@ class PeerTrackerClient:
         return self._post("/files/register", corpo.model_dump(exclude_none=True))
 
     def search_file(self, query: str, query_id: str) -> SearchResult | None:
-        """Envia ``SEARCH_FILE`` e devolve o ``SEARCH_RESULT`` tipado.
-
-        Args:
-            query: Nome legível da música.
-            query_id: UUID gerado pelo peer (correlação, main.tex §7.2).
-        """
+        """Envia ``SEARCH_FILE`` e devolve o ``SEARCH_RESULT`` tipado."""
         corpo = SearchFile(query_id=query_id, query=query, ttl=3)
         resposta = self._post("/search", corpo.model_dump())
         if resposta is None:
@@ -127,32 +141,123 @@ class PeerTrackerClient:
         return self._post("/files/leave", corpo.model_dump())
 
     # ------------------------------------------------------------------
-    # Transporte
+    # Transporte com fallback (§7.5)
     # ------------------------------------------------------------------
 
     def _post(self, rota: str, corpo: dict[str, Any]) -> dict[str, Any] | None:
-        """POST na API do tracker; ``None`` em qualquer falha (já logada)."""
+        """POST na API do tracker atual, com fallback aos demais em falha de rede.
+
+        Returns:
+            Corpo JSON da resposta; ``None`` em erro HTTP (não de conectividade).
+
+        Raises:
+            TodosTrackersIndisponiveis: Se todos os trackers da lista falharem
+                por timeout/conexão recusada.
+        """
+        ultimo_erro: Exception | None = None
+        for _ in range(len(self._trackers)):
+            idx = self.current_tracker_index
+            try:
+                resposta = self._cliente(idx).post(rota, json=corpo)
+                resposta.raise_for_status()
+                dados = resposta.json()
+                self._talvez_reassignar(dados)
+                return dados
+            except (httpx.TimeoutException, httpx.ConnectError) as exc:
+                logger.warning(
+                    "tracker %s indisponível na rota %s (%s); fallback para o próximo",
+                    self._id(idx),
+                    rota,
+                    exc,
+                )
+                ultimo_erro = exc
+                self._avancar_e_reapresentar(rota)
+            except httpx.HTTPStatusError as exc:
+                logger.error(
+                    "tracker %s rota=%s HTTP %d: %s",
+                    self._id(idx),
+                    rota,
+                    exc.response.status_code,
+                    exc.response.text,
+                )
+                return None
+            except httpx.HTTPError:
+                logger.exception("erro HTTP no tracker %s rota=%s", self._id(idx), rota)
+                return None
+        raise TodosTrackersIndisponiveis(
+            f"nenhum dos {len(self._trackers)} trackers respondeu à rota {rota}"
+        ) from ultimo_erro
+
+    def _avancar_e_reapresentar(self, rota: str) -> None:
+        """Passa ao próximo tracker e reenvia ``PEER_HELLO`` lá (§7.5)."""
+        self.current_tracker_index = (self.current_tracker_index + 1) % len(
+            self._trackers
+        )
+        # A própria chamada de PEER_HELLO não deve recursar; sem identidade
+        # (antes do primeiro hello) também não há o que reapresentar.
+        if rota != "/peers/hello" and self._identidade is not None:
+            self._hello_direto()
+
+    def _talvez_reassignar(self, dados: object) -> None:
+        """Migra para o tracker de ``reassign_to``, se a resposta trouxer um."""
+        if not isinstance(dados, dict) or self._reassignando:
+            return
+        alvo = dados.get("reassign_to")
+        if not isinstance(alvo, dict):
+            return
+        self._reassignando = True
         try:
-            resposta = self._http.post(rota, json=corpo)
+            self._migrar_para(str(alvo["ip"]), int(alvo["api_port"]))
+        except (KeyError, TypeError, ValueError):
+            logger.warning("reassign_to malformado, ignorado: %r", alvo)
+        finally:
+            self._reassignando = False
+
+    def _migrar_para(self, ip: str, api_port: int) -> None:
+        """Aponta o cliente ao tracker ``(ip, api_port)`` e se reapresenta lá."""
+        for idx, tracker in enumerate(self._trackers):
+            if str(tracker["ip"]) == ip and int(tracker["api_port"]) == api_port:
+                self.current_tracker_index = idx
+                break
+        else:
+            self._trackers.append(
+                {"tracker_id": f"{ip}:{api_port}", "ip": ip, "api_port": api_port}
+            )
+            self.current_tracker_index = len(self._trackers) - 1
+        logger.info("REASSIGN_TRACKER: peer migrado para %s:%d", ip, api_port)
+        if self._identidade is not None:
+            self._hello_direto()
+
+    def _hello_direto(self) -> None:
+        """Envia um ``PEER_HELLO`` ao tracker atual, sem fallback nem reassign."""
+        assert self._identidade is not None
+        nome_peer, ip, porta = self._identidade
+        corpo = PeerHello(nome_peer=nome_peer, ip=ip, porta=porta).model_dump()
+        try:
+            resposta = self._cliente(self.current_tracker_index).post(
+                "/peers/hello", json=corpo
+            )
             resposta.raise_for_status()
-            return resposta.json()
-        except httpx.TimeoutException:
-            logger.error("timeout no tracker %s rota=%s", self.tracker_id, rota)
-            return None
-        except httpx.ConnectError:
-            logger.error(
-                "conexão recusada pelo tracker %s rota=%s", self.tracker_id, rota
+        except httpx.HTTPError as exc:
+            logger.warning(
+                "PEER_HELLO ao novo tracker %s falhou (%s)", self.tracker_id, exc
             )
-            return None
-        except httpx.HTTPStatusError as exc:
-            logger.error(
-                "tracker %s rota=%s HTTP %d: %s",
-                self.tracker_id,
-                rota,
-                exc.response.status_code,
-                exc.response.text,
-            )
-            return None
-        except httpx.HTTPError:
-            logger.exception("erro HTTP no tracker %s rota=%s", self.tracker_id, rota)
-            return None
+
+    # ------------------------------------------------------------------
+    # Sessões HTTP por tracker
+    # ------------------------------------------------------------------
+
+    def _base_url(self, idx: int) -> str:
+        tracker = self._trackers[idx]
+        return f"http://{tracker['ip']}:{tracker['api_port']}"
+
+    def _id(self, idx: int) -> str:
+        return str(self._trackers[idx].get("tracker_id", self._base_url(idx)))
+
+    def _cliente(self, idx: int) -> httpx.Client:
+        """Reusa (ou cria) a sessão HTTP do tracker ``idx``."""
+        cliente = self._clientes.get(idx)
+        if cliente is None:
+            cliente = httpx.Client(base_url=self._base_url(idx), timeout=self.timeout)
+            self._clientes[idx] = cliente
+        return cliente

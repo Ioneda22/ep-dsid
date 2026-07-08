@@ -6,9 +6,9 @@ ip: 127.0.0.1
 api_port: 8001          # FastAPI (REST com peers)   — tracker-2: 8002, tracker-3: 8003
 sync_port: 9001         # TCP (sincronização)        — tracker-2: 9002, tracker-3: 9003
 is_bootstrap: true      # apenas tracker-1 é bootstrap
-known_trackers:
-  - { tracker_id: tracker-2, ip: 127.0.0.1, sync_port: 9002 }
-  - { tracker_id: tracker-3, ip: 127.0.0.1, sync_port: 9003 }
+known_trackers:  # api_port também: o rebalance diz ao peer cedido onde se reportar (§6.5)
+  - { tracker_id: tracker-2, ip: 127.0.0.1, sync_port: 9002, api_port: 8002 }
+  - { tracker_id: tracker-3, ip: 127.0.0.1, sync_port: 9003, api_port: 8003 }
 db_path: data/tracker-1/peerspot.db
 log_path: logs/tracker-1.log
 log_level: INFO

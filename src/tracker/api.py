@@ -125,27 +125,27 @@ def create_app(
         )
 
     @app.post("/peers/hello")
-    def peers_hello(body: PeerHello) -> dict[str, str]:
+    def peers_hello(body: PeerHello) -> dict[str, Any]:
         return handlers.handle_peer_hello(body, index, db)
 
     @app.post("/peers/leave")
-    def peers_leave(body: PeerLeave) -> dict[str, str]:
-        return handlers.handle_peer_leave(body, index)
+    def peers_leave(body: PeerLeave) -> dict[str, Any]:
+        return handlers.handle_peer_leave(body, index, sync_client)
 
     @app.post("/peers/update-ip")
-    def peers_update_ip(body: UpdateIp) -> dict[str, str]:
+    def peers_update_ip(body: UpdateIp) -> dict[str, Any]:
         return handlers.handle_update_ip(body, index)
 
     @app.post("/peers/seed-report")
-    def peers_seed_report(body: SeedReport) -> dict[str, str]:
-        return handlers.handle_seed_report(body, index)
+    def peers_seed_report(body: SeedReport) -> dict[str, Any]:
+        return handlers.handle_seed_report(body, index, sync_client)
 
     @app.post("/files/register")
-    def files_register(body: RegisterFile) -> dict[str, str]:
+    def files_register(body: RegisterFile) -> dict[str, Any]:
         return handlers.handle_register_file(body, index, sync_client)
 
     @app.post("/files/leave")
-    def files_leave(body: PeerLeaveFile) -> dict[str, str]:
+    def files_leave(body: PeerLeaveFile) -> dict[str, Any]:
         return handlers.handle_peer_leave_file(body, index, sync_client)
 
     @app.post("/search")
