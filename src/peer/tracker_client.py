@@ -71,6 +71,11 @@ class PeerTrackerClient:
         atual = self._trackers[self.current_tracker_index]
         return str(atual.get("tracker_id", self._base_url(self.current_tracker_index)))
 
+    @property
+    def trackers_conhecidos(self) -> list[str]:
+        """Ids (ou URLs) de todos os trackers da lista de fallback (§7.2, status)."""
+        return [self._id(i) for i in range(len(self._trackers))]
+
     def close(self) -> None:
         """Encerra todas as sessões HTTP abertas."""
         for cliente in self._clientes.values():
@@ -141,11 +146,63 @@ class PeerTrackerClient:
         return self._post("/files/leave", corpo.model_dump())
 
     # ------------------------------------------------------------------
+    # Playlists (Fase 6) — dados de usuário, locais ao tracker atual
+    # ------------------------------------------------------------------
+
+    def criar_playlist(self, dono: str, nome: str) -> int | None:
+        """``POST /playlists``; devolve o ``playlist_id`` criado."""
+        resposta = self._post("/playlists", {"dono": dono, "nome": nome})
+        if resposta is None:
+            return None
+        return int(resposta["playlist_id"])
+
+    def listar_playlists(self, dono: str) -> list[dict[str, Any]] | None:
+        """``GET /playlists/{dono}``; devolve a lista de playlists do dono."""
+        resposta = self._get(f"/playlists/{dono}")
+        if resposta is None:
+            return None
+        return list(resposta["playlists"])
+
+    def obter_playlist(self, playlist_id: int) -> dict[str, Any] | None:
+        """``GET /playlists/{id}``; devolve ``{nome, dono, itens}`` ou ``None``."""
+        return self._get(f"/playlists/{playlist_id}")
+
+    def adicionar_item_playlist(
+        self, playlist_id: int, hash_arquivo: str
+    ) -> dict[str, Any] | None:
+        """``POST /playlists/{id}/items``; a ordem é atribuída pelo tracker."""
+        return self._post(f"/playlists/{playlist_id}/items", {"hash": hash_arquivo})
+
+    def remover_item_playlist(
+        self, playlist_id: int, hash_arquivo: str
+    ) -> dict[str, Any] | None:
+        """``DELETE /playlists/{id}/items/{hash}``."""
+        return self._delete(f"/playlists/{playlist_id}/items/{hash_arquivo}")
+
+    def deletar_playlist(self, playlist_id: int) -> dict[str, Any] | None:
+        """``DELETE /playlists/{id}``."""
+        return self._delete(f"/playlists/{playlist_id}")
+
+    # ------------------------------------------------------------------
     # Transporte com fallback (§7.5)
     # ------------------------------------------------------------------
 
     def _post(self, rota: str, corpo: dict[str, Any]) -> dict[str, Any] | None:
-        """POST na API do tracker atual, com fallback aos demais em falha de rede.
+        """POST na API do tracker atual (ver :meth:`_request`)."""
+        return self._request("POST", rota, corpo)
+
+    def _get(self, rota: str) -> dict[str, Any] | None:
+        """GET na API do tracker atual (ver :meth:`_request`)."""
+        return self._request("GET", rota, None)
+
+    def _delete(self, rota: str) -> dict[str, Any] | None:
+        """DELETE na API do tracker atual (ver :meth:`_request`)."""
+        return self._request("DELETE", rota, None)
+
+    def _request(
+        self, metodo: str, rota: str, corpo: dict[str, Any] | None
+    ) -> dict[str, Any] | None:
+        """Requisita a API do tracker atual, com fallback aos demais em falha de rede.
 
         Returns:
             Corpo JSON da resposta; ``None`` em erro HTTP (não de conectividade).
@@ -158,7 +215,7 @@ class PeerTrackerClient:
         for _ in range(len(self._trackers)):
             idx = self.current_tracker_index
             try:
-                resposta = self._cliente(idx).post(rota, json=corpo)
+                resposta = self._cliente(idx).request(metodo, rota, json=corpo)
                 resposta.raise_for_status()
                 dados = resposta.json()
                 self._talvez_reassignar(dados)

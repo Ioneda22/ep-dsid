@@ -88,13 +88,18 @@ def cluster_de_trackers(
     ids: tuple[str, ...] = ("tracker-1", "tracker-2", "tracker-3"),
     com_flooding: bool = True,
     search_timeout: float = 2.0,
+    clock: Callable[[], float] = time.time,
 ) -> Iterator[dict[str, TrackerNode]]:
     """Sobe ``len(ids)`` trackers conectados entre si e derruba ao sair.
 
     Os sync servers sobem primeiro (porta 0 → dinâmica); só então cada nó
     monta sua lista de ``KnownTracker`` com as portas efetivas dos demais.
+
+    ``clock`` é injetado em TODOS os índices (§10): passe um relógio mutável para
+    exercitar de forma determinística o que depende de tempo (expiração,
+    failure detection) sem dormir.
     """
-    indices = {tid: Index(tracker_id=tid) for tid in ids}
+    indices = {tid: Index(clock=clock, tracker_id=tid) for tid in ids}
     sync_servers: dict[str, SyncServer] = {}
     for tid in ids:
         servidor = SyncServer(tid, "127.0.0.1", 0, indices[tid])

@@ -17,6 +17,7 @@ import threading
 import time
 from collections.abc import Callable
 from pathlib import Path
+from typing import Any
 
 logger = logging.getLogger(__name__)
 
@@ -77,20 +78,84 @@ class TrackerDB:
         return [nome for (nome,) in rows]
 
     # ------------------------------------------------------------------
-    # Playlists — stubs até a Fase 6 (§9)
+    # Playlists — dados de usuário, locais ao tracker (Fase 6, §7.2)
+    #
+    # Não são propagadas entre trackers via SYNC_TABLE: só o índice de
+    # arquivos é replicado. Uma playlist só existe no tracker onde foi
+    # criada (limitação aceita, registrada no CHANGELOG).
     # ------------------------------------------------------------------
 
     def criar_playlist(self, dono: str, nome: str) -> int:
-        """Stub: CRUD de playlists chega na Fase 6."""
-        raise NotImplementedError("playlists serão implementadas na Fase 6")
+        """Cria uma playlist e devolve seu ``id`` autoincrementado."""
+        with self._lock:
+            cur = self._conn.execute(
+                "INSERT INTO playlists (dono, nome, criada_em) VALUES (?, ?, ?)",
+                (dono, nome, self._clock()),
+            )
+            self._conn.commit()
+            return int(cur.lastrowid)
 
-    def adicionar_item_playlist(self, playlist_id: int, hash_arquivo: str) -> None:
-        """Stub: CRUD de playlists chega na Fase 6."""
-        raise NotImplementedError("playlists serão implementadas na Fase 6")
+    def listar_playlists(self, dono: str) -> list[dict[str, Any]]:
+        """Lista as playlists de um dono, em ordem de criação (``id``)."""
+        with self._lock:
+            rows = self._conn.execute(
+                "SELECT id, nome FROM playlists WHERE dono = ? ORDER BY id",
+                (dono,),
+            ).fetchall()
+        return [{"id": pid, "nome": nome, "dono": dono} for (pid, nome) in rows]
 
-    def listar_playlist(self, playlist_id: int) -> list[str]:
-        """Stub: CRUD de playlists chega na Fase 6."""
-        raise NotImplementedError("playlists serão implementadas na Fase 6")
+    def proxima_ordem(self, playlist_id: int) -> int:
+        """Devolve a próxima ``ordem`` livre (``MAX+1``), robusta a remoções."""
+        with self._lock:
+            (maxo,) = self._conn.execute(
+                "SELECT COALESCE(MAX(ordem), -1) FROM playlist_itens "
+                "WHERE playlist_id = ?",
+                (playlist_id,),
+            ).fetchone()
+        return int(maxo) + 1
+
+    def adicionar_item(self, playlist_id: int, hash_arquivo: str, ordem: int) -> None:
+        """Insere um hash na playlist na posição ``ordem`` (única por playlist)."""
+        with self._lock:
+            self._conn.execute(
+                "INSERT INTO playlist_itens (playlist_id, hash, ordem) "
+                "VALUES (?, ?, ?)",
+                (playlist_id, hash_arquivo, ordem),
+            )
+            self._conn.commit()
+
+    def remover_item(self, playlist_id: int, hash_arquivo: str) -> None:
+        """Remove um hash da playlist (no-op se o hash não estiver nela)."""
+        with self._lock:
+            self._conn.execute(
+                "DELETE FROM playlist_itens WHERE playlist_id = ? AND hash = ?",
+                (playlist_id, hash_arquivo),
+            )
+            self._conn.commit()
+
+    def obter_playlist(self, playlist_id: int) -> dict[str, Any] | None:
+        """Devolve ``{nome, dono, itens: [hash, ...]}`` ou ``None`` se não existir."""
+        with self._lock:
+            cabecalho = self._conn.execute(
+                "SELECT dono, nome FROM playlists WHERE id = ?", (playlist_id,)
+            ).fetchone()
+            if cabecalho is None:
+                return None
+            itens = self._conn.execute(
+                "SELECT hash FROM playlist_itens WHERE playlist_id = ? ORDER BY ordem",
+                (playlist_id,),
+            ).fetchall()
+        dono, nome = cabecalho
+        return {"nome": nome, "dono": dono, "itens": [h for (h,) in itens]}
+
+    def deletar_playlist(self, playlist_id: int) -> None:
+        """Apaga a playlist e todos os seus itens (no-op se não existir)."""
+        with self._lock:
+            self._conn.execute(
+                "DELETE FROM playlist_itens WHERE playlist_id = ?", (playlist_id,)
+            )
+            self._conn.execute("DELETE FROM playlists WHERE id = ?", (playlist_id,))
+            self._conn.commit()
 
     def close(self) -> None:
         """Fecha a conexão com o banco."""

@@ -7,6 +7,56 @@ e o projeto segue [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
 ## [Não lançado]
 
+### Adicionado
+- **Fase 6 — Playlists e comandos auxiliares de CLI** (§9 do `CLAUDE.md`):
+  CRUD de playlists no tracker e os comandos finais do §7.2 no peer.
+  - `src/tracker/persistence.py` — CRUD de playlists (antes stubs):
+    `criar_playlist(dono, nome) -> id`, `listar_playlists(dono)`,
+    `adicionar_item(playlist_id, hash, ordem)`, `remover_item`,
+    `obter_playlist(id) -> {nome, dono, itens}`, `deletar_playlist` e o
+    helper `proxima_ordem` (`MAX(ordem)+1`, robusto a remoções — evita
+    colisão na PK `(playlist_id, ordem)` quando um item do meio é removido).
+  - `src/tracker/api.py` — rotas REST: `POST /playlists`,
+    `GET /playlists/{dono}`, `GET /playlists/{id}`,
+    `POST /playlists/{id}/items`, `DELETE /playlists/{id}/items/{hash}` e
+    `DELETE /playlists/{id}`. As rotas de `id` usam o convertor Starlette
+    `:int` para não colidirem com `GET /playlists/{dono}` (regex `[0-9]+`
+    vs. nome de peer). Corpos `CriarPlaylistBody`/`AdicionarItemBody`
+    (pydantic); playlist inexistente vira `ERROR` `NOT_FOUND` (HTTP 404).
+  - `src/peer/tracker_client.py` — métodos de playlist correspondentes e a
+    property `trackers_conhecidos` (para o `status`). O transporte com
+    fallback (§7.5) foi generalizado de `_post` para `_request(metodo, …)`,
+    com `_get`/`_delete`/`_post` delegando — GET/DELETE herdam o mesmo
+    fallback e a migração por `reassign_to`.
+  - `src/peer/cli.py` — comandos finais do §7.2: `playlist
+    create/add/remove/show/list/delete`, `peers <hash>` (refaz o
+    `SEARCH_FILE` para mostrar fontes frescas; exige `search` antes, como o
+    `download`, pela resolução nome→hash) e `status` (tracker atual,
+    trackers conhecidos, arquivos locais e downloads em andamento —
+    pendências do `ChunkManager` sem arquivo montado). Helper de módulo
+    `_parse_id`.
+  - Testes: `tests/unit/test_persistence.py` (criar/obter, listar por dono,
+    remoção sem colisão de ordem, deletar em cascata; substitui o antigo
+    teste de stub) e `tests/integration/test_playlists.py` (tracker uvicorn
+    real: ciclo criar → 3 itens → listar → remover um → obter → deletar,
+    mais 404 de playlist inexistente e listagem de dono sem playlists).
+    Suíte completa: **175 testes**.
+  - Demonstração manual: a `PeerCLI` real, dirigida contra um tracker real,
+    exercitou todos os comandos de playlist, `peers <hash>` (fontes frescas
+    + hash desconhecido) e `status`.
+
+### Limitações aceitas
+- **Playlists NÃO são propagadas entre trackers via `SYNC_TABLE`.** São
+  dados de usuário (SQLite durável, §6.1 camada 3), locais ao tracker onde
+  foram criadas — só o índice de arquivos (`nome→hash`, `hash→peers`) é
+  full-replicated (main.tex §11.1). Consequências assumidas: (1) uma
+  playlist criada no `tracker-1` não é visível ao consultar o `tracker-2`;
+  (2) se o peer sofre fallback (§7.5) ou é reassignado (rebalance, Fase 5)
+  para outro tracker, suas playlists não o acompanham. É aceitável no
+  escopo do projeto: playlists são conveniência de apresentação, não estado
+  crítico do sistema distribuído; replicá-las exigiria estendê-las ao
+  protocolo de sincronização (`SYNC_TABLE`/LWW), fora do pedido da Fase 6.
+
 ### Alterado
 - **Eventos multi-hash agora carimbam um único `timestamp` (além do único
   `seq`)**: `Index.remove_peer` (PEER_LEAVE), `apply_seed_hashes` (reconciliação
