@@ -78,7 +78,7 @@ def test_validate_campo_com_tipo_errado() -> None:
 
 
 def test_required_fields_cobre_todos_os_tipos() -> None:
-    """Sanity: todos os 19 tipos do Listing 7.2 estão em REQUIRED_FIELDS."""
+    """Sanity: todos os 21 tipos do Listing 7.2 estão em REQUIRED_FIELDS."""
     esperados = {
         "PEER_HELLO",
         "PEER_LEAVE",
@@ -94,8 +94,10 @@ def test_required_fields_cobre_todos_os_tipos() -> None:
         "CHUNK_DATA",
         "PEER_LEAVE_FILE",
         "SYNC_TABLE",
-        "FULL_SYNC",
+        "SYNC_DIGEST",
+        "SYNC_PULL",
         "TRACKER_REJOIN",
+        "TRACKER_LIST",
         "TRACKER_ANNOUNCE",
         "REASSIGN_TRACKER",
         "ERROR",

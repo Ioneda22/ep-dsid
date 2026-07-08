@@ -82,11 +82,11 @@ peerspot/
 │   │   ├── main.py                 # entrypoint: python -m src.tracker.main --config ...
 │   │   ├── api.py                  # FastAPI app: rotas REST para peers
 │   │   ├── index.py                # estado em memória: nome→hash, hash→peers, nome_peer→endereço
-│   │   ├── sync_server.py          # servidor TCP para SYNC_TABLE / FULL_SYNC / SEARCH_FORWARD
-│   │   ├── sync_client.py          # propagação outbound via flooding TCP unicast (SYNC_TABLE/FULL_SYNC)
+│   │   ├── sync_server.py          # servidor TCP: SYNC_TABLE / SYNC_PULL / SYNC_DIGEST / SEARCH_FORWARD / TRACKER_REJOIN
+│   │   ├── sync_client.py          # outbound: flooding SYNC_TABLE/SYNC_DIGEST, reparo SYNC_PULL, reintegração
 │   │   ├── routing.py              # SEARCH_FORWARD entre trackers (TTL, query_id)
 │   │   ├── tombstone.py            # marcação e expiração de tombstones (10 min)
-│   │   ├── anti_entropy.py         # reconciliação anti-entropy periódica (push FULL_SYNC)
+│   │   ├── anti_entropy.py         # digest de versões periódico (push SYNC_DIGEST, backstop do delta perdido)
 │   │   ├── failure_detector.py     # timeout do SEED_REPORT (2 rodadas = 6 min → tombstone)
 │   │   ├── rebalance.py            # lógica de REASSIGN_TRACKER após TRACKER_REJOIN
 │   │   ├── persistence.py          # SQLite: usuários, playlists
@@ -167,13 +167,15 @@ peerspot/
 ### Remoção
 - `PEER_LEAVE_FILE` (peer → tracker)
 
-### Sincronização (tracker → tracker, TCP unicast flooding)
-- `SYNC_TABLE` — atualização incremental com `origem`, `timestamp`, `entries` (cada entry com `ativo: bool` para distinguir adição de tombstone)
-- `FULL_SYNC` — estado completo, resposta a `TRACKER_REJOIN`
+### Sincronização (tracker → tracker, TCP unicast)
+- `SYNC_TABLE` — atualização incremental com `origem`, `seq`, `timestamp`, `entries` (cada entry com `ativo: bool` distinguindo adição de tombstone). O par `(origem, seq)` identifica a escrita; o receptor mantém um **vetor de versões** `visto[origem]` (maior `seq` aplicado por origem) e um **conjunto de pendências** `(origem, desde_seq)` para as lacunas em aberto. O `seq` só **detecta** perda — o desempate de conflito continua sendo o LWW por `timestamp`.
+- `SYNC_DIGEST` — vetor de versões (`versoes: {tracker_id: seq}`), enviado periodicamente; quem recebe compara componente a componente e pede o que falta.
+- `SYNC_PULL` — reparo direcionado: `faltando: [{origem, desde_seq}]`, onde `desde_seq` é o `visto[origem]` capturado no instante da lacuna (guardado na pendência). A resposta são uma ou mais `SYNC_TABLE` (um evento por `seq`) na **mesma conexão TCP**, incluindo tombstones. `desde_seq=0` pede o estado inteiro de uma origem (reconstrução na reintegração).
 
 ### Gestão de membros (trackers)
-- `TRACKER_REJOIN` — novo tracker ao bootstrap node
-- `TRACKER_ANNOUNCE` — bootstrap node propaga novo tracker
+- `TRACKER_REJOIN` — tracker que volta se anuncia ao primeiro conhecido que aceitar a conexão
+- `TRACKER_LIST` — resposta ao `TRACKER_REJOIN`: só a membership (trackers ativos), **sem** índice
+- `TRACKER_ANNOUNCE` — propaga o novo tracker aos demais
 - `REASSIGN_TRACKER` (tracker → peer) — informa novo tracker ao peer durante rebalance
 
 ### Erro genérico
@@ -196,7 +198,7 @@ Códigos de `ERROR` padronizados (defina em `src/common/errors.py`):
    - `POST /files/register` → `REGISTER_FILE`
    - `POST /files/leave` → `PEER_LEAVE_FILE`
    - `POST /search` → `SEARCH_FILE`
-   - `GET /trackers` → lista de trackers conhecidos (suporta `trackers_conhecidos` do `FULL_SYNC`)
+   - `GET /trackers` → lista de trackers conhecidos (espelha `trackers_conhecidos` do `TRACKER_LIST`)
    - `GET /health` → healthcheck
 
 2. **Lógica de negócio** — `src/tracker/handlers.py`
@@ -207,8 +209,9 @@ Códigos de `ERROR` padronizados (defina em `src/common/errors.py`):
 
 4. **Sincronização** — `src/tracker/sync_server.py` + `sync_client.py`
    - Servidor TCP separado em porta dedicada (default **9001**).
-   - Cliente faz flooding TCP unicast paralelo (uma thread por destino).
-   - **Anti-entropy periódico** (`src/tracker/anti_entropy.py`): push de `FULL_SYNC` a todos os trackers a cada `anti_entropy_interval_seconds` (default **180s**), reaplicado via LWW (idempotente) para repor deltas que o `SYNC_TABLE` best-effort tenha perdido. Intervalo mantido < `tombstone_retention_seconds`.
+   - Cliente faz flooding TCP unicast paralelo (uma thread por destino) do `SYNC_TABLE` (com `seq`) e do `SYNC_DIGEST`.
+   - **Detecção por `seq` + reparo direcionado**: cada escrita local incrementa `meu_seq` e carimba a(s) entrada(s) com `(origem, seq)`; cada tracker mantém `visto[origem]` (vetor de versões). Um `SYNC_TABLE` com `seq > visto[origem]+1` revela uma lacuna → abre uma **pendência** (guardando o `desde_seq` capturado, o menor por origem) e dispara `SYNC_PULL({origem, desde_seq})`. As escritas fora de ordem são aplicadas na hora e `visto` avança por `max`; o reparo é idempotente (o LWW no receptor descarta o velho) e a pendência fecha quando a resposta chega.
+   - **Digest periódico** (`src/tracker/anti_entropy.py`): push de `SYNC_DIGEST` (só o `visto`) a cada `digest_interval_seconds` (default **300s = 5 min**, < `tombstone_retention_seconds`), cobrindo o ponto cego da detecção inline (a última escrita de um tracker se perde e ele fica em silêncio).
 
 ### 6.2 Índice em memória — `src/tracker/index.py`
 
@@ -246,10 +249,10 @@ class Index:
 
 ### 6.5 Reintegração e rebalance — `src/tracker/rebalance.py`
 
-- Ao receber `TRACKER_REJOIN` (apenas o **bootstrap node** processa, demais ignoram):
-  1. Responde com `FULL_SYNC` contendo todo o índice + lista de trackers.
-  2. Propaga `TRACKER_ANNOUNCE` via flooding aos demais.
-  3. Calcula cessão: cada tracker (incluindo o bootstrap) cede `floor(meus_peers / N_trackers)` peers ao tracker reintegrado via `REASSIGN_TRACKER`.
+- O tracker que volta se anuncia com `TRACKER_REJOIN` ao **primeiro conhecido reachable** (o bootstrap não é um nó fixo — é o primeiro da lista que aceita a conexão).
+- Quem recebe `TRACKER_REJOIN` responde com `TRACKER_LIST` (só a membership, **sem** índice) e propaga `TRACKER_ANNOUNCE` aos demais.
+- De posse da membership, o tracker **reconstrói o índice** como caso particular do reparo: um `SYNC_PULL(desde_seq=0)` por origem conhecida (inclusive a própria), recebendo o estado atual (com tombstones) como `SYNC_TABLE`. Ao aplicar por LWW, **inicializa `visto`** e **restaura `meu_seq` = maior `seq` das entradas com `origem == meu_id`**, evitando reuso de `seq` após reinício sem persistir em disco.
+- Depois, cada tracker ativo cede `floor(meus_peers / N_trackers)` peers ao reintegrado via `REASSIGN_TRACKER` (rebalance — Fase 5).
 
 ### 6.6 Configuração do tracker (YAML)
 
@@ -274,7 +277,7 @@ seed_report_timeout_seconds: 360       # 6 min = 2 rodadas perdidas
 tombstone_retention_seconds: 600       # 10 min
 sync_outbound_timeout_seconds: 3
 search_forward_timeout_seconds: 2
-anti_entropy_interval_seconds: 180     # 3 min; push FULL_SYNC entre trackers (< retenção do tombstone)
+digest_interval_seconds: 300           # 5 min; push SYNC_DIGEST entre trackers (< retenção do tombstone)
 ```
 
 ---
@@ -376,7 +379,7 @@ download_pool_size: 8
 ### 8.1 Ordem de inicialização
 
 1. **Primeiro o bootstrap node** (`tracker-1`), pois os demais trackers enviam `TRACKER_REJOIN` a ele ao subir.
-2. **Depois `tracker-2` e `tracker-3`** — cada um, ao iniciar, envia `TRACKER_REJOIN` ao bootstrap e recebe `FULL_SYNC`.
+2. **Depois `tracker-2` e `tracker-3`** — cada um, ao iniciar, envia `TRACKER_REJOIN` ao primeiro conhecido reachable, recebe `TRACKER_LIST` e reconstrói o índice via `SYNC_PULL(desde_seq=0)`.
 3. **Por fim os peers** (`alice`, `bob`, `carol`) — cada um envia `PEER_HELLO` ao primeiro tracker da sua lista.
 
 ### 8.2 Comandos por terminal
@@ -412,7 +415,7 @@ Os scripts devem: ativar o virtualenv se existir (`.venv/bin/activate`), exporta
 ### 8.4 Simulação de falhas
 
 - **Derrubar um nó:** `Ctrl+C` no terminal correspondente (crash failure controlado).
-- **Tracker volta:** reabrir o terminal e rodar o mesmo comando → dispara `TRACKER_REJOIN` automático e recebe `FULL_SYNC`.
+- **Tracker volta:** reabrir o terminal e rodar o mesmo comando → dispara `TRACKER_REJOIN` automático, recebe `TRACKER_LIST` e reconstrói o índice via `SYNC_PULL(desde_seq=0)`.
 - **Peer morre abruptamente:** fechar o terminal sem usar `quit` → após `seed_report_timeout_seconds` (6 min) o tracker o marca como tombstone.
 
 ### 8.5 Diretórios de runtime
@@ -466,9 +469,9 @@ Implemente nesta ordem. **Não avance** para a próxima fase sem que a anterior 
 2. `src/tracker/failure_detector.py` (timeout 6 min)
 3. `src/peer/tracker_client.py` — fallback completo
 4. Download **paralelo** no peer (substitui o sequencial da Fase 3)
-5. `TRACKER_REJOIN`, `FULL_SYNC`, `TRACKER_ANNOUNCE`
+5. `TRACKER_REJOIN` → `TRACKER_LIST` → `SYNC_PULL(desde_seq=0)`, `TRACKER_ANNOUNCE`, `SYNC_DIGEST`
 6. `src/tracker/rebalance.py` + `REASSIGN_TRACKER`
-7. **Teste integração**: matar tracker, peer faz fallback, retornar tracker, ele recebe `FULL_SYNC`.
+7. **Teste integração**: matar tracker, peer faz fallback, retornar tracker, ele reconstrói o índice via `SYNC_PULL(desde_seq=0)`.
 
 ### Fase 6 — Funcionalidades de produto
 1. Playlists (CRUD via API e CLI)
@@ -503,7 +506,7 @@ Implemente nesta ordem. **Não avance** para a próxima fase sem que a anterior 
 1. **NÃO** invente novas mensagens. Se algo parece faltar, releia o `main.tex` Listing 7.2; se ainda assim faltar, pergunte.
 2. **NÃO** use `asyncio` no tracker para a sincronização TCP. O `main.tex` Listing 8.1 explicitamente usa `socket` + `threading`. Mantenha. FastAPI internamente é async — isso é ok.
 3. **NÃO** misture o protocolo peer-peer com FastAPI. Peer-peer é socket TCP bruto.
-4. **NÃO** persista o índice. O índice é em memória; ao reiniciar, o tracker se reconstrói via `FULL_SYNC` (e via `SEED_REPORT` dos peers ao longo do tempo).
+4. **NÃO** persista o índice. O índice é em memória; ao reiniciar, o tracker se reconstrói via `SYNC_PULL(desde_seq=0)` na reintegração (e via `SEED_REPORT` dos peers ao longo do tempo).
 5. **NÃO** implemente DHT, exclusão mútua distribuída entre trackers, ou eleição de líder. O `main.tex` explicitamente descarta essas abordagens (Seções 14 e 15).
 6. **NÃO** use eventos `multiprocessing` ou IPC além de sockets. Todo paralelismo dentro de um nó é `threading`.
 7. **NÃO** suprima exceções silenciosamente. Sempre logue com `logger.exception()` antes de tratar.
@@ -524,7 +527,7 @@ O sistema está pronto quando o seguinte roteiro funciona com os 6 nós rodando 
 5. ✅ Download usa exclusivamente `alice` como fonte. Após conclusão, `bob` reaparece no índice como segunda fonte do hash.
 6. ✅ `carol` (conectado ao `tracker-3`) baixa o mesmo arquivo agora distribuindo chunks entre `alice` e `bob`.
 7. ✅ `Ctrl+C` no terminal do `tracker-1`. `alice` faz fallback para `tracker-2` automaticamente (próxima operação não-falha).
-8. ✅ Reabrir o terminal e rodar `tracker-1` novamente. Tracker reintegra via `TRACKER_REJOIN`, recebe `FULL_SYNC`, e alguns peers são reassignados a ele via `REASSIGN_TRACKER`.
+8. ✅ Reabrir o terminal e rodar `tracker-1` novamente. Tracker reintegra via `TRACKER_REJOIN`, recebe `TRACKER_LIST`, reconstrói o índice via `SYNC_PULL(desde_seq=0)` por origem, e alguns peers são reassignados a ele via `REASSIGN_TRACKER`.
 9. ✅ `alice` remove o arquivo (`remove <hash>`). Em < 3s, `tracker-2` e `tracker-3` registram tombstone. `bob` continua aparecendo como fonte.
 10. ✅ `pytest -v` passa 100% dos testes.
 

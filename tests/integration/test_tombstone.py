@@ -49,7 +49,7 @@ def _tombstone_remoto(indice: Index, relogio: RelogioFake) -> None:
     entry = SyncTableEntry(
         hash=HASH, nome_peer="alice", ip="127.0.0.1", porta=7001, ativo=False
     )
-    assert indice.apply_sync_entry(entry, "tracker-2", timestamp=relogio.agora)
+    assert indice.apply_sync_entry(entry, "tracker-2", timestamp=relogio.agora, seq=1)
 
 
 def test_sync_ativo_false_vira_tombstone(indice: Index, relogio: RelogioFake) -> None:

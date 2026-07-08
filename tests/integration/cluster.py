@@ -108,10 +108,13 @@ def cluster_de_trackers(
                 if outro != tid
             ]
             sync_client = (
-                SyncClient(tid, conhecidos, timeout_seconds=1.0)
+                SyncClient(tid, conhecidos, index=indices[tid], timeout_seconds=1.0)
                 if com_flooding
                 else None
             )
+            # Habilita o servidor a disparar SYNC_PULL na detecção de lacuna e a
+            # responder TRACKER_REJOIN (o cluster resolve portas antes dos clients).
+            sync_servers[tid].sync_client = sync_client
             router = SearchRouter(
                 tid, conhecidos, indices[tid], timeout_seconds=search_timeout
             )

@@ -79,8 +79,8 @@ def create_app(
         db: Persistência SQLite (usuários, playlists).
         tracker_id: Identificador deste tracker (ex.: ``"tracker-1"``).
         trackers_conhecidos: Lista de trackers (incluindo este) exposta em
-            ``GET /trackers`` — suporta o ``trackers_conhecidos`` do
-            ``FULL_SYNC`` na Fase 5.
+            ``GET /trackers`` — espelha o ``trackers_conhecidos`` do
+            ``TRACKER_LIST`` (membership da reintegração).
         sync_client: Flooding ``SYNC_TABLE`` aos demais trackers (Fase 4);
             ``None`` desliga a propagação (tracker isolado/testes).
         search_router: Roteamento ``SEARCH_FORWARD`` quando a busca local

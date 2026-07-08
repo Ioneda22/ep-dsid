@@ -2,8 +2,15 @@
 
 Mantém as tabelas ``nome→hashes``, ``hash→metadata``, ``hash→peers``,
 ``nome_peer→endereço`` e os tombstones. O índice **não é persistido**
-(§11.4): ao reiniciar, o tracker o reconstrói via ``FULL_SYNC`` e via
-``SEED_REPORT`` dos peers.
+(§11.4): ao reiniciar, o tracker o reconstrói via ``SYNC_PULL(desde_seq=0)``
+(reintegração) e via ``SEED_REPORT`` dos peers.
+
+Além do estado replicado, o índice guarda a **proveniência** de cada
+escrita — o par ``(origem, seq)`` — e um **vetor de versões** ``visto``
+(maior ``seq`` já visto por origem). O ``seq`` só DETECTA deltas perdidos
+no flooding; o desempate de conflito continua sendo LWW por timestamp
+(main.tex §11.3). O contador local ``visto[tracker_id]`` (== ``meu_seq``) e
+as pendências de pull vivem sob o MESMO lock do índice.
 
 Todo método público adquire ``self._lock`` (§4.5). Métodos com sufixo
 ``_locked`` assumem que o lock já está adquirido e nunca devem ser
@@ -20,9 +27,10 @@ from dataclasses import dataclass
 
 from src.common.errors import NotFoundError, PeerUnknownError
 from src.common.messages import (
-    FullSyncEntry,
     SearchResultEntry,
     SearchResultPeer,
+    SyncPullItem,
+    SyncTable,
     SyncTableEntry,
 )
 
@@ -38,12 +46,16 @@ class FileMetadata:
 
 @dataclass
 class PeerEntry:
-    """Um peer como fonte de um hash, com timestamp para LWW (§6.2).
+    """Um peer como fonte de um hash, com proveniência para LWW/seq (§6.2).
 
-    ``origem`` registra o tracker que produziu a escrita: é o desempate
-    do LWW quando timestamps colidem (main.tex §12.2). Comparar contra o
-    tracker LOCAL não bastaria — o vencedor dependeria da ordem de
-    chegada e as réplicas divergiriam.
+    ``origem``/``seq`` identificam a escrita: o tracker que a produziu e o
+    seu contador monotônico no instante. ``origem`` desempata o LWW quando
+    timestamps colidem (main.tex §12.2) — comparar contra o tracker LOCAL
+    não bastaria, o vencedor dependeria da ordem de chegada e as réplicas
+    divergiriam. ``seq`` só DETECTA deltas perdidos (vetor de versões /
+    SYNC_PULL), nunca desempata conflito. Ambos são sempre preenchidos:
+    escrita local carimba ``(tracker_id, meu_seq)``; escrita remota carrega
+    o ``(origem, seq)`` da mensagem.
     """
 
     nome_peer: str
@@ -51,7 +63,8 @@ class PeerEntry:
     porta: int
     ativo: bool
     timestamp: float
-    origem: str = ""
+    origem: str
+    seq: int
 
 
 @dataclass
@@ -67,14 +80,16 @@ class PeerAddress:
 class TombstoneEntry:
     """Remoção registrada de (hash, peer); expira após 10 min.
 
-    ``origem`` tem o mesmo papel de desempate LWW do :class:`PeerEntry`.
+    ``origem``/``seq`` têm o mesmo papel do :class:`PeerEntry`: desempate LWW
+    por ``origem``, detecção de perda por ``seq`` (nunca desempate).
     """
 
     nome_peer: str
     ip: str
     porta: int
     timestamp: float
-    origem: str = ""
+    origem: str
+    seq: int
 
 
 @dataclass
@@ -110,6 +125,13 @@ class Index:
         self.hash_to_peers: dict[str, dict[str, PeerEntry]] = {}
         self.nome_peer_to_endereco: dict[str, PeerAddress] = {}
         self.tombstones: dict[str, dict[str, TombstoneEntry]] = {}
+        # Proveniencia e deteccao de perda (main.tex §11.3), sob o MESMO lock.
+        # visto[origem] = maior seq ja visto/aplicado daquela origem;
+        # visto[tracker_id] e o proprio meu_seq (contador de escritas locais).
+        # pendencias[origem] = desde_seq capturado numa lacuna, aguardando a
+        # resposta do SYNC_PULL (fecha quando a resposta chega).
+        self._visto: dict[str, int] = {}
+        self._pendencias: dict[str, int] = {}
 
     # ------------------------------------------------------------------
     # Presença de peers
@@ -139,8 +161,11 @@ class Index:
             hashes = [
                 h for h, fontes in self.hash_to_peers.items() if nome_peer in fontes
             ]
-            for hash_arquivo in hashes:
-                self._tombstone_locked(hash_arquivo, nome_peer)
+            if hashes:
+                # Um unico evento (uma saida) -> um seq compartilhado.
+                seq = self._proximo_seq_local_locked()
+                for hash_arquivo in hashes:
+                    self._tombstone_locked(hash_arquivo, nome_peer, seq=seq)
 
     def update_peer_address(self, nome_peer: str, novo_ip: str, porta: int) -> None:
         """Aplica ``UPDATE_IP``: novo endereço refletido em todas as fontes.
@@ -183,8 +208,8 @@ class Index:
         Returns:
             Cópias da entrada gravada e dos metadados do arquivo, para que o
             chamador monte o ``SYNC_TABLE`` de propagação com o MESMO
-            timestamp gravado localmente (LWW exige timestamps idênticos
-            entre as réplicas).
+            timestamp e ``seq`` gravados localmente (LWW exige timestamps
+            idênticos entre as réplicas; o ``seq`` viaja no nível da mensagem).
 
         Raises:
             PeerUnknownError: Se o peer não enviou ``PEER_HELLO`` antes.
@@ -193,8 +218,9 @@ class Index:
         with self._lock:
             endereco = self._endereco_ou_erro_locked(nome_peer)
             self._garantir_metadata_locked(hash_arquivo, nome, tamanho, n_chunks)
+            seq = self._proximo_seq_local_locked()
             self._registrar_fonte_locked(
-                hash_arquivo, nome_peer, endereco, refresh=True
+                hash_arquivo, nome_peer, endereco, refresh=True, seq=seq
             )
             return (
                 copy.copy(self.hash_to_peers[hash_arquivo][nome_peer]),
@@ -208,13 +234,14 @@ class Index:
 
         Returns:
             Cópia do tombstone gravado, para propagação via ``SYNC_TABLE``
-            com o mesmo timestamp local (LWW).
+            com o mesmo timestamp e ``seq`` locais (LWW).
 
         Raises:
             NotFoundError: Se o peer não consta como fonte do hash.
         """
         with self._lock:
-            self._tombstone_locked(hash_arquivo, nome_peer)
+            seq = self._proximo_seq_local_locked()
+            self._tombstone_locked(hash_arquivo, nome_peer, seq=seq)
             return copy.copy(self.tombstones[hash_arquivo][nome_peer])
 
     def apply_seed_hashes(self, nome_peer: str, hashes: set[str]) -> None:
@@ -225,20 +252,34 @@ class Index:
         do relatório viram tombstone — main.tex §7.2 (PEER_LEAVE_FILE é
         redundante com isso, mas dá resposta imediata).
 
+        Um relatório sem mudanças (estado estacionário) não consome ``seq`` —
+        só uma reconciliação que de fato altera o índice avança ``meu_seq``,
+        evitando churn no vetor de versões a cada 3 minutos.
+
         Raises:
             PeerUnknownError: Se o peer não estiver registrado.
         """
         with self._lock:
             endereco = self._endereco_ou_erro_locked(nome_peer)
-            for hash_arquivo in hashes & self.hash_to_metadata.keys():
-                self._registrar_fonte_locked(
-                    hash_arquivo, nome_peer, endereco, refresh=False
-                )
+            novas = {
+                h
+                for h in hashes & self.hash_to_metadata.keys()
+                if nome_peer not in self.hash_to_peers.get(h, {})
+            }
             atuais = {
                 h for h, fontes in self.hash_to_peers.items() if nome_peer in fontes
             }
-            for hash_arquivo in atuais - hashes:
-                self._tombstone_locked(hash_arquivo, nome_peer)
+            removidas = atuais - hashes
+            if not novas and not removidas:
+                return
+            # Uma reconciliacao (um SEED_REPORT) -> um seq compartilhado.
+            seq = self._proximo_seq_local_locked()
+            for hash_arquivo in novas:
+                self._registrar_fonte_locked(
+                    hash_arquivo, nome_peer, endereco, refresh=False, seq=seq
+                )
+            for hash_arquivo in removidas:
+                self._tombstone_locked(hash_arquivo, nome_peer, seq=seq)
 
     # ------------------------------------------------------------------
     # Consultas
@@ -290,16 +331,19 @@ class Index:
             )
 
     # ------------------------------------------------------------------
-    # Sincronização entre trackers (Fase 4)
+    # Sincronização entre trackers: LWW, seq e reparo direcionado
     # ------------------------------------------------------------------
 
     def apply_sync_entry(
-        self, entry: SyncTableEntry, origem_tracker: str, timestamp: float
+        self, entry: SyncTableEntry, origem_tracker: str, timestamp: float, seq: int
     ) -> bool:
         """Aplica uma entrada de ``SYNC_TABLE`` com resolução LWW (§6.2).
 
-        ``timestamp`` vem do nível da mensagem ``SYNC_TABLE`` (Listing 7.2
-        o define por mensagem, não por entry) e por isso é parâmetro.
+        ``timestamp`` e ``seq`` vêm do nível da mensagem ``SYNC_TABLE`` (o
+        Listing 7.2 os define por mensagem, não por entry) e por isso são
+        parâmetros. O ``seq`` é gravado como proveniência da entrada (usado
+        pelo vetor de versões e pelo ``SYNC_PULL``); ele NÃO entra na decisão
+        LWW — só o par ``(timestamp, origem)`` decide (main.tex §11.3).
 
         Regras (main.tex §12.2):
         * timestamp recebido maior que o local → recebido vence;
@@ -316,6 +360,10 @@ class Index:
         tracker ao qual o peer reporta SEED_REPORT; a própria entry
         carrega ip/porta, suficiente para responder buscas.
 
+        O vetor de versões ``visto`` avança à parte, no nível da mensagem
+        (``registrar_recepcao_flood`` / ``avancar_visto``), pois o ``seq`` é
+        por mensagem e o avanço ocorre mesmo quando o LWW descarta a entrada.
+
         Returns:
             ``True`` se a entrada foi aplicada, ``False`` se descartada
             pelo LWW.
@@ -325,42 +373,107 @@ class Index:
             if versao_local is not None and (timestamp, origem_tracker) <= versao_local:
                 return False  # LWW: desatualizada (empate vence maior tracker_id)
             if entry.ativo:
-                self._aplicar_registro_remoto_locked(entry, origem_tracker, timestamp)
+                self._aplicar_registro_remoto_locked(
+                    entry, origem_tracker, timestamp, seq
+                )
             else:
-                self._aplicar_tombstone_remoto_locked(entry, origem_tracker, timestamp)
+                self._aplicar_tombstone_remoto_locked(
+                    entry, origem_tracker, timestamp, seq
+                )
             return True
 
-    def apply_full_sync(self, entries: list[FullSyncEntry]) -> int:
-        """Aplica um ``FULL_SYNC`` inteiro via LWW — reconciliação anti-entropy.
+    def registrar_recepcao_flood(self, origem: str, seq: int) -> int | None:
+        """Registra o ``seq`` de um ``SYNC_TABLE`` do flooding e detecta lacunas.
 
-        Cada peer de cada entrada vira uma escrita LWW independente, usando o
-        ``timestamp`` e a ``origem`` que viajam por peer (não no nível da
-        mensagem, ao contrário do ``SYNC_TABLE``). Reaproveita
-        :meth:`apply_sync_entry`, então herda todas as regras de desempate.
-
-        É idempotente: reaplicar o mesmo estado não muda nada (cada entrada
-        empata com a local e é descartada). Essa é a propriedade que torna o
-        anti-entropy periódico seguro — main.tex §"Reconciliação anti-entropy".
+        Avança ``visto[origem]`` por ``max`` (mesmo com lacuna aberta) e, se
+        houver buraco (``seq > visto[origem] + 1``), abre/atualiza uma
+        pendência guardando o ``visto[origem]`` capturado NO INSTANTE da
+        detecção — não o valor já avançado (main.tex §11.3, "Estado de
+        pendência"). Por origem, mantém o MENOR ``desde_seq`` (um pull desde o
+        menor já cobre qualquer buraco acima).
 
         Returns:
-            Quantas entradas ``(hash, peer)`` foram efetivamente aplicadas.
+            O ``desde_seq`` a pedir num ``SYNC_PULL`` se uma lacuna foi
+            detectada; ``None`` se o ``seq`` for contíguo.
         """
-        aplicadas = 0
-        for entry in entries:
-            for peer in entry.peers:
-                convertida = SyncTableEntry(
-                    hash=entry.hash,
-                    nome_peer=peer.nome_peer,
-                    ip=peer.ip,
-                    porta=peer.porta,
-                    ativo=peer.ativo,
-                    nome=entry.nome if peer.ativo else None,
-                    tamanho=entry.tamanho if peer.ativo else None,
-                    n_chunks=entry.n_chunks if peer.ativo else None,
+        with self._lock:
+            anterior = self._visto.get(origem, 0)
+            self._visto[origem] = max(anterior, seq)
+            if seq <= anterior + 1:
+                return None
+            desde = min(self._pendencias.get(origem, anterior), anterior)
+            self._pendencias[origem] = desde
+            return desde
+
+    def avancar_visto(self, origem: str, seq: int) -> None:
+        """Avança ``visto[origem]`` por ``max`` SEM detecção de lacuna.
+
+        Usado ao aplicar RESPOSTAS de ``SYNC_PULL`` (o próprio reparo) e na
+        reconstrução por reintegração: reaplicar deltas não deve abrir novas
+        pendências nem disparar novos pulls.
+        """
+        with self._lock:
+            self._visto[origem] = max(self._visto.get(origem, 0), seq)
+
+    def resolver_pendencia(self, origem: str) -> None:
+        """Fecha a pendência de ``origem`` — a resposta do ``SYNC_PULL`` chegou.
+
+        Idempotente e re-disparável: se o reparo não bastou, a próxima escrita
+        de ``origem`` (detecção inline) ou o ``SYNC_DIGEST`` reabre o pedido.
+        """
+        with self._lock:
+            self._pendencias.pop(origem, None)
+
+    def versoes(self) -> dict[str, int]:
+        """Vetor de versões ``visto`` (cópia), incluindo ``versoes[meu_id]``.
+
+        É o payload do ``SYNC_DIGEST``: o maior ``seq`` conhecido por origem,
+        com o próprio ``meu_seq`` sempre presente (mesmo que 0).
+        """
+        with self._lock:
+            copia = dict(self._visto)
+            copia.setdefault(self._tracker_id, 0)
+            return copia
+
+    def pendencias(self) -> dict[str, int]:
+        """Pendências de pull em aberto (cópia) — para status/observabilidade."""
+        with self._lock:
+            return dict(self._pendencias)
+
+    def comparar_digest(self, versoes_remoto: dict[str, int]) -> list[SyncPullItem]:
+        """Compara um ``SYNC_DIGEST`` recebido com o ``visto`` local.
+
+        Para cada origem em que o emissor está à frente (``versoes_remoto >
+        visto local``), devolve um ``SyncPullItem(origem, desde_seq=visto
+        local)`` a pedir ao emissor. Fecha o ponto cego da detecção inline
+        (última escrita perdida + silêncio da origem — main.tex §11.3).
+        """
+        with self._lock:
+            faltando: list[SyncPullItem] = []
+            for origem, seq_remoto in versoes_remoto.items():
+                local = self._visto.get(origem, 0)
+                if seq_remoto > local:
+                    faltando.append(SyncPullItem(origem=origem, desde_seq=local))
+            return faltando
+
+    def selecionar_para_pull(self, faltando: list[SyncPullItem]) -> list[SyncTable]:
+        """Monta a resposta de um ``SYNC_PULL`` a partir do ESTADO ATUAL.
+
+        Para cada ``{origem, desde_seq}`` pedido, seleciona as entradas cuja
+        proveniência tem essa ``origem`` e ``seq > desde_seq`` (fontes ativas e
+        tombstones), agrupa por ``seq`` e devolve uma ``SYNC_TABLE`` por evento
+        (um ``seq`` por mensagem). Sem log histórico: cada entrada já carrega a
+        ``(origem, seq, timestamp)`` da escrita corrente e o LWW no receptor
+        descarta o que estiver velho (main.tex §11.3). ``desde_seq=0`` devolve
+        o estado inteiro daquela origem (reconstrução na reintegração).
+        """
+        with self._lock:
+            mensagens: list[SyncTable] = []
+            for item in faltando:
+                mensagens.extend(
+                    self._eventos_da_origem_locked(item.origem, item.desde_seq)
                 )
-                if self.apply_sync_entry(convertida, peer.origem, peer.timestamp):
-                    aplicadas += 1
-        return aplicadas
+            return mensagens
 
     def expire_tombstones(self, retention_seconds: float) -> int:
         """Descarta tombstones mais velhos que ``retention_seconds`` (§6.2).
@@ -415,6 +528,18 @@ class Index:
         )
         self.nome_to_hashes.setdefault(nome, set()).add(hash_arquivo)
 
+    def _proximo_seq_local_locked(self) -> int:
+        """Aloca o próximo ``seq`` para uma escrita ORIGINADA por este tracker.
+
+        Incrementa ``meu_seq`` (mantido em ``visto[tracker_id]``) e o devolve.
+        Um evento local — registro, tombstone, UPDATE_IP ou reconciliação de
+        SEED_REPORT — consome UM ``seq``, carimbando todas as entradas
+        afetadas (main.tex §11.3).
+        """
+        novo = self._visto.get(self._tracker_id, 0) + 1
+        self._visto[self._tracker_id] = novo
+        return novo
+
     def _registrar_fonte_locked(
         self,
         hash_arquivo: str,
@@ -422,12 +547,14 @@ class Index:
         endereco: PeerAddress,
         *,
         refresh: bool,
+        seq: int,
     ) -> None:
         """Adiciona o peer como fonte; ``refresh=False`` preserva o timestamp.
 
         REGISTER_FILE explícito usa ``refresh=True`` (evento novo para LWW);
         o anti-entropy do SEED_REPORT usa ``refresh=False`` para não gerar
-        churn de timestamp a cada 3 minutos.
+        churn de timestamp a cada 3 minutos. ``seq`` é a proveniência local
+        já alocada pelo chamador (um por evento).
         """
         fontes = self.hash_to_peers.setdefault(hash_arquivo, {})
         if not refresh and nome_peer in fontes:
@@ -439,10 +566,11 @@ class Index:
             ativo=True,
             timestamp=self._clock(),
             origem=self._tracker_id,
+            seq=seq,
         )
         self._descartar_tombstone_locked(hash_arquivo, nome_peer)
 
-    def _tombstone_locked(self, hash_arquivo: str, nome_peer: str) -> None:
+    def _tombstone_locked(self, hash_arquivo: str, nome_peer: str, seq: int) -> None:
         entry = self.hash_to_peers.get(hash_arquivo, {}).pop(nome_peer, None)
         if entry is None:
             raise NotFoundError(
@@ -454,18 +582,24 @@ class Index:
             porta=entry.porta,
             timestamp=self._clock(),
             origem=self._tracker_id,
+            seq=seq,
         )
 
     def _atualizar_fontes_locked(self, nome_peer: str, ip: str, porta: int) -> None:
         agora = self._clock()
+        seq: int | None = None
         for fontes in self.hash_to_peers.values():
             entry = fontes.get(nome_peer)
             if entry is None:
                 continue
+            if seq is None:
+                # Um unico seq compartilhado por todo o UPDATE_IP (um evento).
+                seq = self._proximo_seq_local_locked()
             entry.ip = ip
             entry.porta = porta
             entry.timestamp = agora
             entry.origem = self._tracker_id
+            entry.seq = seq
 
     def _descartar_tombstone_locked(self, hash_arquivo: str, nome_peer: str) -> None:
         """Remove um tombstone sem deixar dict vazio órfão na tabela."""
@@ -493,7 +627,7 @@ class Index:
         return None
 
     def _aplicar_registro_remoto_locked(
-        self, entry: SyncTableEntry, origem_tracker: str, timestamp: float
+        self, entry: SyncTableEntry, origem_tracker: str, timestamp: float, seq: int
     ) -> None:
         if entry.hash not in self.hash_to_metadata and entry.nome is not None:
             # Metadados viajam no SYNC_TABLE (extensão do Listing 7.2) para
@@ -509,10 +643,11 @@ class Index:
             ativo=True,
             timestamp=timestamp,
             origem=origem_tracker,
+            seq=seq,
         )
 
     def _aplicar_tombstone_remoto_locked(
-        self, entry: SyncTableEntry, origem_tracker: str, timestamp: float
+        self, entry: SyncTableEntry, origem_tracker: str, timestamp: float, seq: int
     ) -> None:
         # Tombstone gravado mesmo sem fonte local prévia: protege contra um
         # registro atrasado (timestamp menor) que chegue depois da remoção.
@@ -523,7 +658,49 @@ class Index:
             porta=entry.porta,
             timestamp=timestamp,
             origem=origem_tracker,
+            seq=seq,
         )
+
+    def _eventos_da_origem_locked(self, origem: str, desde_seq: int) -> list[SyncTable]:
+        """Agrupa por ``seq`` as entradas de ``origem`` com ``seq > desde_seq``.
+
+        Fontes ativas viram entries ``ativo=True`` (com metadados, para o
+        receptor responder buscas por nome); tombstones viram ``ativo=False``.
+        Uma ``SYNC_TABLE`` por ``seq`` (um evento por mensagem).
+        """
+        por_seq: dict[int, tuple[float, list[SyncTableEntry]]] = {}
+        for hash_arquivo, fontes in self.hash_to_peers.items():
+            meta = self.hash_to_metadata.get(hash_arquivo)
+            for fonte in fontes.values():
+                if fonte.origem != origem or fonte.seq <= desde_seq:
+                    continue
+                entrada = SyncTableEntry(
+                    hash=hash_arquivo,
+                    nome_peer=fonte.nome_peer,
+                    ip=fonte.ip,
+                    porta=fonte.porta,
+                    ativo=True,
+                    nome=meta.nome if meta is not None else None,
+                    tamanho=meta.tamanho if meta is not None else None,
+                    n_chunks=meta.n_chunks if meta is not None else None,
+                )
+                por_seq.setdefault(fonte.seq, (fonte.timestamp, []))[1].append(entrada)
+        for hash_arquivo, por_peer in self.tombstones.items():
+            for tomb in por_peer.values():
+                if tomb.origem != origem or tomb.seq <= desde_seq:
+                    continue
+                entrada = SyncTableEntry(
+                    hash=hash_arquivo,
+                    nome_peer=tomb.nome_peer,
+                    ip=tomb.ip,
+                    porta=tomb.porta,
+                    ativo=False,
+                )
+                por_seq.setdefault(tomb.seq, (tomb.timestamp, []))[1].append(entrada)
+        return [
+            SyncTable(origem=origem, seq=seq, timestamp=ts, entries=entradas)
+            for seq, (ts, entradas) in sorted(por_seq.items())
+        ]
 
     def _peers_ativos_locked(self, hash_arquivo: str) -> list[SearchResultPeer]:
         return [

@@ -117,6 +117,7 @@ def handle_register_file(
                     n_chunks=meta.n_chunks,
                 )
             ],
+            seq=entry.seq,
             timestamp=entry.timestamp,
         )
     return _ack()
@@ -143,6 +144,7 @@ def handle_peer_leave_file(
                     ativo=False,
                 )
             ],
+            seq=tombstone.seq,
             timestamp=tombstone.timestamp,
         )
     return _ack()

@@ -1,13 +1,15 @@
-"""Propagação outbound entre trackers — flooding TCP unicast (§6.1, camada 4).
+"""Comunicação outbound entre trackers — flooding, pull e digest (§6.1, camada 4).
 
 Espelha o Listing 8.1 do ``main.tex`` (``propagar_sync`` / ``enviar_unicast``)
-com ``socket`` + ``threading`` — NUNCA asyncio (§11.2). Em vez das globals
-do listing, as dependências entram por construtor (§14.4).
+com ``socket`` + ``threading`` — NUNCA asyncio (§11.2). Em vez das globals do
+listing, as dependências entram por construtor (§14.4).
 
-O envio é *transient asynchronous* (main.tex §6.1): uma thread por tracker
-conhecido, sem aguardar confirmação. Falha de conexão marca o tracker como
-suspeito e NÃO retransmite — a reconciliação fica a cargo do ``SEED_REPORT``
-periódico (anti-entropy) e do ``FULL_SYNC`` na reintegração (Fase 5).
+O envio de ``SYNC_TABLE`` e ``SYNC_DIGEST`` é *transient asynchronous*: uma
+thread por tracker conhecido, sem aguardar confirmação. Falha de conexão marca
+o tracker como suspeito e NÃO retransmite — quem perdeu o delta o repara
+sozinho puxando com ``SYNC_PULL`` (detecção inline ou digest periódico,
+main.tex §11.3). O ``SYNC_PULL`` em si é request/response na MESMA conexão TCP
+(padrão do ``SEARCH_FORWARD``): a resposta são uma ou mais ``SYNC_TABLE``.
 """
 
 from __future__ import annotations
@@ -20,16 +22,25 @@ from collections.abc import Callable
 from dataclasses import dataclass
 from typing import Any
 
+from pydantic import ValidationError
+
 from src.common.messages import (
-    FullSync,
-    FullSyncEntry,
-    FullSyncPeer,
-    FullSyncTracker,
+    SyncDigest,
+    SyncPull,
+    SyncPullItem,
     SyncTable,
     SyncTableEntry,
+    TrackerList,
+    TrackerListItem,
+    TrackerRejoin,
 )
-from src.common.protocol import send_json_line
-from src.tracker.index import IndexSnapshot
+from src.common.protocol import (
+    ConnectionClosedError,
+    MessageReader,
+    ProtocolError,
+    send_json_line,
+)
+from src.tracker.index import Index
 
 logger = logging.getLogger(__name__)
 
@@ -44,53 +55,77 @@ class KnownTracker:
 
 
 class SyncClient:
-    """Cliente de flooding TCP unicast para os demais trackers.
+    """Cliente TCP para os demais trackers: flooding, digest e pull.
 
     Exemplo:
-        >>> cliente = SyncClient("tracker-1", [KnownTracker("tracker-2", "127.0.0.1", 9002)])
-        >>> cliente.propagar_sync([entry], timestamp=1000.0)  # não bloqueia
+        >>> cliente = SyncClient(
+        ...     "tracker-1", [KnownTracker("tracker-2", "127.0.0.1", 9002)], index
+        ... )
+        >>> cliente.propagar_sync([entry], seq=1, timestamp=1000.0)  # nao bloqueia
     """
 
     def __init__(
         self,
         tracker_id: str,
         known_trackers: list[KnownTracker],
+        index: Index | None = None,
         timeout_seconds: float = 3.0,
         clock: Callable[[], float] = time.time,
     ) -> None:
         self.tracker_id = tracker_id
         self.known_trackers = list(known_trackers)
+        self.index = index
         self.timeout_seconds = timeout_seconds
         self._clock = clock
         self._suspeitos_lock = threading.Lock()
         self._suspeitos: set[str] = set()
 
     # ------------------------------------------------------------------
-    # Flooding (Listing 8.1 do main.tex)
+    # Flooding de escritas (SYNC_TABLE) — Listing 8.1 do main.tex
     # ------------------------------------------------------------------
 
     def propagar_sync(
-        self, entries: list[SyncTableEntry], timestamp: float | None = None
+        self,
+        entries: list[SyncTableEntry],
+        seq: int,
+        timestamp: float | None = None,
     ) -> None:
         """Dispara ``SYNC_TABLE`` em paralelo para cada tracker conhecido.
 
-        Uma thread daemon por destino (flooding, Listing 8.1); o chamador
-        não bloqueia esperando rede. ``timestamp`` deve ser o MESMO gravado
-        no índice local, para que o LWW convirja entre as réplicas; quando
-        omitido, usa o relógio corrente.
+        Uma thread daemon por destino (flooding, Listing 8.1); o chamador não
+        bloqueia esperando rede. ``seq`` é o contador local da escrita e
+        ``timestamp`` deve ser o MESMO gravado no índice local, para o LWW
+        convergir entre as réplicas; quando omitido, usa o relógio corrente.
         """
         if not self.known_trackers:
             return
         mensagem = SyncTable(
             origem=self.tracker_id,
+            seq=seq,
             timestamp=self._clock() if timestamp is None else timestamp,
             entries=entries,
         ).model_dump()
+        self._floodar(mensagem, rotulo="sync-out")
+
+    def propagar_digest(self, versoes: dict[str, int]) -> None:
+        """Floods ``SYNC_DIGEST`` (vetor de versões) a cada tracker conhecido.
+
+        One-shot *best-effort* como ``propagar_sync`` — falha marca o destino
+        suspeito e não retransmite; o próprio destino, ao comparar o digest,
+        puxa o que faltar (main.tex §11.3, "Digest de versões").
+        """
+        if not self.known_trackers:
+            return
+        mensagem = SyncDigest(origem=self.tracker_id, versoes=versoes).model_dump()
+        self._floodar(mensagem, rotulo="digest-out")
+
+    def _floodar(self, mensagem: dict[str, Any], *, rotulo: str) -> None:
+        """Uma thread daemon por destino, fire-and-forget (flooding paralelo)."""
         for tracker in self.known_trackers:
             threading.Thread(
                 target=self.enviar_unicast,
                 args=(tracker, mensagem),
-                name=f"sync-out-{tracker.tracker_id}",
+                name=f"{rotulo}-{tracker.tracker_id}",
                 daemon=True,
             ).start()
 
@@ -98,8 +133,8 @@ class SyncClient:
         """Envia uma mensagem JSON one-shot ao ``sync_port`` de um tracker.
 
         Em timeout/recusa de conexão, marca o tracker como suspeito e NÃO
-        retransmite (Listing 8.1): a reconciliação ocorrerá via SEED_REPORT
-        ou FULL_SYNC na reintegração.
+        retransmite (Listing 8.1): a reconciliação ocorre via ``SYNC_DIGEST`` /
+        ``SYNC_PULL`` puxados pelo próprio destino.
 
         Returns:
             ``True`` se a mensagem foi entregue ao socket com sucesso.
@@ -112,7 +147,7 @@ class SyncClient:
         except (TimeoutError, ConnectionRefusedError, OSError) as exc:
             logger.warning(
                 "tracker_id=%s destino=%s indisponível (%s): marcado suspeito; "
-                "reconciliação via SEED_REPORT/FULL_SYNC",
+                "reconciliação via SYNC_DIGEST/SYNC_PULL",
                 self.tracker_id,
                 tracker.tracker_id,
                 exc,
@@ -128,56 +163,205 @@ class SyncClient:
         )
         return True
 
-    def enviar_full_sync(
-        self,
-        tracker_destino: KnownTracker,
-        snapshot: IndexSnapshot,
-        trackers_conhecidos: list[FullSyncTracker] | None = None,
-    ) -> bool:
-        """Envia o estado completo do índice a um tracker (``FULL_SYNC``).
+    # ------------------------------------------------------------------
+    # Reparo direcionado (SYNC_PULL) — request/response na mesma conexão
+    # ------------------------------------------------------------------
 
-        Usada na reintegração (Fase 5); a montagem a partir do snapshot já
-        fica pronta aqui. Cada arquivo carrega fontes ativas e tombstones
-        ainda retidos, ambos com timestamps — o receptor aplica LWW.
+    def solicitar_pull_de(self, destino_id: str, faltando: list[SyncPullItem]) -> None:
+        """Dispara (em thread daemon) um ``SYNC_PULL`` a ``destino_id``.
+
+        Fire-and-forget: não bloqueia o handler de sincronização que detectou a
+        lacuna. Se o destino não for conhecido, apenas loga (não deveria
+        ocorrer na topologia estática).
         """
-        mensagem = FullSync(
-            origem=self.tracker_id,
-            entries=_entries_do_snapshot(snapshot),
-            trackers_conhecidos=trackers_conhecidos or [],
-        ).model_dump()
-        return self.enviar_unicast(tracker_destino, mensagem)
-
-    def propagar_full_sync(
-        self,
-        snapshot: IndexSnapshot,
-        trackers_conhecidos: list[FullSyncTracker] | None = None,
-    ) -> None:
-        """Faz *push* do estado completo (``FULL_SYNC``) a cada tracker conhecido.
-
-        É a reconciliação anti-entropy periódica entre trackers (main.tex
-        §"Reconciliação anti-entropy"): uma thread daemon por destino,
-        *best-effort* igual ao :meth:`propagar_sync` — falha marca o destino
-        suspeito e NÃO retransmite, pois a próxima rodada repara. A mensagem
-        é montada uma única vez e reusada em todos os envios.
-        """
-        if not self.known_trackers:
+        destino = self.tracker_por_id(destino_id)
+        if destino is None:
+            logger.warning(
+                "tracker_id=%s não conhece origem %s para SYNC_PULL",
+                self.tracker_id,
+                destino_id,
+            )
             return
-        mensagem = FullSync(
-            origem=self.tracker_id,
-            entries=_entries_do_snapshot(snapshot),
-            trackers_conhecidos=trackers_conhecidos or [],
-        ).model_dump()
-        for tracker in self.known_trackers:
-            threading.Thread(
-                target=self.enviar_unicast,
-                args=(tracker, mensagem),
-                name=f"anti-entropy-{tracker.tracker_id}",
-                daemon=True,
-            ).start()
+        threading.Thread(
+            target=self.solicitar_pull,
+            args=(destino, faltando),
+            name=f"sync-pull-{destino_id}",
+            daemon=True,
+        ).start()
+
+    def solicitar_pull(
+        self, destino: KnownTracker, faltando: list[SyncPullItem]
+    ) -> int:
+        """Envia ``SYNC_PULL`` a ``destino`` e aplica as ``SYNC_TABLE`` de resposta.
+
+        A resposta vem na MESMA conexão TCP do pedido (padrão do
+        ``SEARCH_FORWARD``): uma ou mais ``SYNC_TABLE`` (um evento por ``seq``),
+        encerradas pelo fechamento da conexão pelo respondente. Cada uma é
+        aplicada por LWW e AVANÇA o ``visto`` sem detecção de lacuna — o próprio
+        reparo não deve disparar novos pulls. Ao fim, fecha as pendências das
+        origens pedidas (main.tex §11.3).
+
+        Returns:
+            Quantas entradas ``(hash, peer)`` foram efetivamente aplicadas.
+        """
+        if self.index is None or not faltando:
+            return 0
+        mensagem = SyncPull(faltando=faltando).model_dump()
+        aplicadas = 0
+        try:
+            with socket.create_connection(
+                (destino.ip, destino.sync_port), timeout=self.timeout_seconds
+            ) as sock:
+                send_json_line(sock, mensagem)
+                reader = MessageReader(sock)
+                while True:
+                    header, _ = reader.recv_message(timeout=self.timeout_seconds)
+                    aplicadas += self._aplicar_resposta_pull(header)
+        except ConnectionClosedError:
+            pass  # respondente fechou a conexão: fim normal das respostas
+        except (TimeoutError, ConnectionRefusedError, OSError, ProtocolError) as exc:
+            logger.warning(
+                "tracker_id=%s SYNC_PULL a %s falhou (%s); pendência reaberta depois",
+                self.tracker_id,
+                destino.tracker_id,
+                exc,
+            )
+            self.marcar_tracker_suspeito(destino.tracker_id)
+            return aplicadas
+        self._desmarcar_suspeito(destino.tracker_id)
+        for item in faltando:
+            self.index.resolver_pendencia(item.origem)
+        logger.info(
+            "SYNC_PULL: tracker_id=%s destino=%s pediu=%d aplicadas=%d",
+            self.tracker_id,
+            destino.tracker_id,
+            len(faltando),
+            aplicadas,
+        )
+        return aplicadas
+
+    def _aplicar_resposta_pull(self, header: dict[str, Any]) -> int:
+        """Aplica uma ``SYNC_TABLE`` de resposta: LWW + avanço de ``visto``.
+
+        O ``origem`` da resposta é o autor ORIGINAL das escritas (não o
+        respondente), então o ``visto`` avança na origem certa.
+        """
+        assert self.index is not None
+        msg = SyncTable.model_validate(header)
+        self.index.avancar_visto(msg.origem, msg.seq)
+        return sum(
+            self.index.apply_sync_entry(entry, msg.origem, msg.timestamp, msg.seq)
+            for entry in msg.entries
+        )
 
     # ------------------------------------------------------------------
-    # Suspeitos (marcar_tracker_suspeito do Listing 8.1)
+    # Reintegração (TRACKER_REJOIN -> TRACKER_LIST -> SYNC_PULL(0))
     # ------------------------------------------------------------------
+
+    def reintegrar(self, meu_ip: str, meu_sync_port: int) -> int:
+        """Reintegra este tracker via o PRIMEIRO conhecido que aceitar a conexão.
+
+        O bootstrap não é um nó fixo: o tracker que volta percorre a sua lista de
+        conhecidos (na ordem do YAML) e usa como ponto de entrada o primeiro
+        reachable. Dele recebe a membership (``TRACKER_LIST``) e reconstrói o
+        índice como caso particular do reparo — um ``SYNC_PULL(desde_seq=0)`` por
+        origem conhecida (inclusive a própria). Ao aplicar as respostas, ``visto``
+        e ``meu_seq`` são inicializados (via ``avancar_visto``), evitando reuso de
+        ``seq`` após reinício sem persistir em disco (main.tex §12.3).
+
+        Returns:
+            Quantas entradas foram reconstruídas (0 se nenhum conhecido respondeu).
+        """
+        for candidato in self.known_trackers:
+            recebidos = self._solicitar_tracker_list(candidato, meu_ip, meu_sync_port)
+            if recebidos is None:
+                continue  # não aceitou a conexão / respondeu inválido: próximo
+            origens = {self.tracker_id} | {t.tracker_id for t in self.known_trackers}
+            for item in recebidos:
+                if item.tracker_id == self.tracker_id:
+                    continue
+                self.adicionar_tracker(
+                    KnownTracker(item.tracker_id, item.ip, item.porta)
+                )
+                origens.add(item.tracker_id)
+            faltando = [SyncPullItem(origem=o, desde_seq=0) for o in sorted(origens)]
+            aplicadas = self.solicitar_pull(candidato, faltando)
+            logger.info(
+                "tracker_id=%s reintegrado via %s: %d entradas reconstruídas (%d origens)",
+                self.tracker_id,
+                candidato.tracker_id,
+                aplicadas,
+                len(origens),
+            )
+            return aplicadas
+        logger.warning(
+            "tracker_id=%s nenhum conhecido aceitou o TRACKER_REJOIN; índice "
+            "será reconstruído aos poucos via SEED_REPORT / SYNC_DIGEST",
+            self.tracker_id,
+        )
+        return 0
+
+    def _solicitar_tracker_list(
+        self, candidato: KnownTracker, meu_ip: str, meu_sync_port: int
+    ) -> list[TrackerListItem] | None:
+        """Envia ``TRACKER_REJOIN`` a ``candidato`` e lê o ``TRACKER_LIST``.
+
+        Returns:
+            A membership recebida, ou ``None`` se ``candidato`` não aceitou a
+            conexão / respondeu inválido (o chamador tenta o próximo conhecido).
+        """
+        rejoin = TrackerRejoin(
+            tracker_id=self.tracker_id, ip=meu_ip, porta=meu_sync_port
+        ).model_dump()
+        try:
+            with socket.create_connection(
+                (candidato.ip, candidato.sync_port), timeout=self.timeout_seconds
+            ) as sock:
+                send_json_line(sock, rejoin)
+                header, _ = MessageReader(sock).recv_message(
+                    timeout=self.timeout_seconds
+                )
+                return TrackerList.model_validate(header).trackers_conhecidos
+        except (
+            TimeoutError,
+            ConnectionRefusedError,
+            ConnectionClosedError,
+            OSError,
+        ) as exc:
+            logger.warning(
+                "tracker_id=%s TRACKER_REJOIN a %s falhou (%s); tentando o próximo",
+                self.tracker_id,
+                candidato.tracker_id,
+                exc,
+            )
+            return None
+        except (ProtocolError, ValidationError):
+            logger.exception(
+                "tracker_id=%s resposta inválida de %s ao TRACKER_REJOIN",
+                self.tracker_id,
+                candidato.tracker_id,
+            )
+            return None
+
+    # ------------------------------------------------------------------
+    # Membership e suspeitos
+    # ------------------------------------------------------------------
+
+    def tracker_por_id(self, tracker_id: str) -> KnownTracker | None:
+        """Resolve um ``tracker_id`` no ``KnownTracker`` correspondente."""
+        for tracker in self.known_trackers:
+            if tracker.tracker_id == tracker_id:
+                return tracker
+        return None
+
+    def adicionar_tracker(self, tracker: KnownTracker) -> None:
+        """Acrescenta um tracker à membership se ainda não conhecido (idempotente).
+
+        Usado ao processar ``TRACKER_ANNOUNCE``. Na topologia estática do
+        protótipo todos já se conhecem do YAML, então é normalmente um no-op.
+        """
+        if self.tracker_por_id(tracker.tracker_id) is None:
+            self.known_trackers.append(tracker)
 
     def marcar_tracker_suspeito(self, tracker_id: str) -> None:
         """Registra que um tracker não respondeu ao último envio."""
@@ -197,45 +381,3 @@ class SyncClient:
     def _desmarcar_suspeito(self, tracker_id: str) -> None:
         with self._suspeitos_lock:
             self._suspeitos.discard(tracker_id)
-
-
-def _entries_do_snapshot(snapshot: IndexSnapshot) -> list[FullSyncEntry]:
-    """Converte um ``IndexSnapshot`` nas entries do ``FULL_SYNC`` (Listing 7.2).
-
-    Cada arquivo carrega fontes ativas (``ativo=True``) e tombstones ainda
-    retidos (``ativo=False``), ambos com seus timestamps — o receptor aplica
-    LWW normalmente.
-    """
-    entries: list[FullSyncEntry] = []
-    for hash_arquivo, meta in snapshot.hash_to_metadata.items():
-        peers = [
-            FullSyncPeer(
-                nome_peer=e.nome_peer,
-                ip=e.ip,
-                porta=e.porta,
-                ativo=True,
-                timestamp=e.timestamp,
-                origem=e.origem,
-            )
-            for e in snapshot.hash_to_peers.get(hash_arquivo, {}).values()
-        ] + [
-            FullSyncPeer(
-                nome_peer=t.nome_peer,
-                ip=t.ip,
-                porta=t.porta,
-                ativo=False,
-                timestamp=t.timestamp,
-                origem=t.origem,
-            )
-            for t in snapshot.tombstones.get(hash_arquivo, {}).values()
-        ]
-        entries.append(
-            FullSyncEntry(
-                hash=hash_arquivo,
-                nome=meta.nome,
-                tamanho=meta.tamanho,
-                n_chunks=meta.n_chunks,
-                peers=peers,
-            )
-        )
-    return entries

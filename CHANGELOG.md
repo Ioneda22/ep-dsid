@@ -52,6 +52,50 @@ e o projeto segue [Versionamento Semântico](https://semver.org/lang/pt-BR/).
   `pydantic>=2` explicitado em `requirements.txt`.
 
 ### Adicionado
+- **Reconciliação entre trackers por número de sequência (`seq`) + reparo
+  direcionado** (refactor da anti-entropy; **substitui o `FULL_SYNC`
+  periódico**, refletido no `main.tex` §11.3): o `SYNC_TABLE` continua
+  incremental e *best-effort*, mas agora carrega um `seq` monotônico por
+  origem. Cada tracker guarda a proveniência `(origem, seq)` de cada entrada e
+  um **vetor de versões** `visto[origem]`; a perda de um delta é **detectada**
+  (lacuna de `seq`) e reparada puxando só o que faltou, não reenviando o índice
+  inteiro — custo O(divergência), não O(índice) por rodada. O `seq` apenas
+  detecta; o LWW por `timestamp` continua a única autoridade de conflito
+  (`apply_sync_entry` inalterado, só ganhou o `seq` como proveniência).
+  - `src/common/messages.py` — `SYNC_TABLE` ganhou `seq`; novas mensagens
+    `SYNC_DIGEST` (vetor de versões), `SYNC_PULL` (`faltando: [{origem,
+    desde_seq}]`) e `TRACKER_LIST` (só a membership); `MESSAGE_MODELS` passa de
+    19 a 21 tipos. Refletido no Listing 7.2 do `main.tex`.
+  - `src/tracker/index.py` — `PeerEntry`/`TombstoneEntry` ganharam `seq`
+    (proveniência obrigatória, junto de `origem`); `meu_seq` (== `visto[meu_id]`),
+    o vetor `visto` e o conjunto de **pendências** vivem sob o MESMO lock. Novos
+    métodos: `registrar_recepcao_flood` (detecção de lacuna + `visto` por `max` +
+    pendência com o `desde_seq` capturado no instante), `avancar_visto` (reparo/
+    reconstrução, sem abrir pendência), `resolver_pendencia`, `versoes`,
+    `pendencias`, `comparar_digest` e `selecionar_para_pull` (resposta agrupada
+    por `seq`, com tombstones, a partir só do estado atual — sem log histórico).
+  - `src/tracker/sync_server.py` — `SYNC_TABLE` detecta lacuna e dispara
+    `SYNC_PULL(desde_seq capturado)`; novos handlers `SYNC_PULL` (responde uma
+    `SYNC_TABLE` por `seq` na mesma conexão TCP e fecha) e `SYNC_DIGEST` (compara
+    e puxa); `TRACKER_REJOIN` responde `TRACKER_LIST` + propaga `TRACKER_ANNOUNCE`.
+  - `src/tracker/sync_client.py` — `propagar_sync` carrega `seq`; novos
+    `propagar_digest`, `solicitar_pull`/`solicitar_pull_de` (aplica as respostas
+    via `avancar_visto` + `apply_sync_entry` e fecha a pendência) e `reintegrar`
+    (`TRACKER_REJOIN` → `TRACKER_LIST` → `SYNC_PULL(desde_seq=0)` pelo primeiro
+    conhecido reachable, inicializando `visto`/`meu_seq` sem persistir em disco).
+  - `src/tracker/anti_entropy.py` — `DigestBroadcaster`: thread que faz *push* de
+    `SYNC_DIGEST` a cada `digest_interval_seconds` (default **300s = 5 min**, <
+    retenção do tombstone), backstop para a última escrita perdida + silêncio.
+  - `src/tracker/main.py` sobe o `DigestBroadcaster` e dispara a reintegração em
+    background; `digest_interval_seconds` entra em `TrackerSettings` e nos
+    `config/tracker-{1,2,3}.yaml` (substitui `anti_entropy_interval_seconds`).
+  - Testes: `tests/unit/test_seq_pull.py` (alocação de `seq`, proveniência sem
+    afetar o LWW, detecção de lacuna com `desde_seq` capturado, `visto` por `max`,
+    pendências, `comparar_digest`, resposta de pull agrupada por `seq` com
+    tombstones) e `tests/integration/test_sync_repair.py` (3 trackers reais:
+    lacuna inline reparada por `SYNC_PULL`, última escrita reposta pelo
+    `SYNC_DIGEST`, reintegração reconstrói o índice e inicializa `visto`/`meu_seq`).
+    Suíte completa: 161 testes.
 - **Reconciliação anti-entropy periódica entre trackers** (fecha o buraco de
   entropia do `SYNC_TABLE`, decidido com o usuário e refletido no `main.tex`
   §"Reconciliação anti-entropy"): o `SYNC_TABLE` é incremental e
@@ -341,6 +385,14 @@ e o projeto segue [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 - `README.md` com pré-requisitos e setup do ambiente.
 
 ### Removido
+- **`FULL_SYNC` removido por completo** — substituído pelo esquema `seq` +
+  `SYNC_PULL` / `SYNC_DIGEST` acima. Saíram: a mensagem `FULL_SYNC` e os modelos
+  `FullSync*` (`src/common/messages.py`), o `Index.apply_full_sync`, o
+  `SyncClient.propagar_full_sync`/`enviar_full_sync`/`_entries_do_snapshot`, o
+  handler no `sync_server` e o *push* periódico do índice inteiro
+  (`AntiEntropyReconciler` → agora `DigestBroadcaster`). Também removidos os
+  testes `tests/unit/test_full_sync.py` e `tests/integration/test_anti_entropy.py`.
+  Nenhuma referência a `FULL_SYNC` resta no código.
 - Layout plano antigo (`common/`, `peer/`, `tracker/`), `pyproject.toml`,
   `peerspot.egg-info/`, `main.py` de exemplo, `config/trackers.json` e
   `scripts/lab.local.ps1`, substituídos pela estrutura do §3.

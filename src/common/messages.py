@@ -188,10 +188,8 @@ class SyncTableEntry(BaseModel):
     ``nome``/``tamanho``/``n_chunks`` são uma extensão consciente do
     Listing 7.2 (autorizada, refletida no main.tex): sem eles, um tracker
     que conhece o hash apenas via SYNC_TABLE não consegue responder buscas
-    por nome nem aceitar o re-registro pós-download de um peer local —
-    o FULL_SYNC já carrega esses metadados, a omissão no SYNC_TABLE era
-    inconsistente. Opcionais: tombstones (``ativo=False``) não precisam
-    deles.
+    por nome nem aceitar o re-registro pós-download de um peer local.
+    Opcionais: tombstones (``ativo=False``) não precisam deles.
     """
 
     hash: str
@@ -205,56 +203,61 @@ class SyncTableEntry(BaseModel):
 
 
 class SyncTable(BaseModel):
-    """Atualização incremental do índice (tracker -> tracker)."""
+    """Atualização incremental do índice (tracker -> tracker).
+
+    O par ``(origem, seq)`` identifica a escrita: ``origem`` é o tracker que
+    a produziu e ``seq`` é o seu contador monotônico. O receptor guarda esse
+    par junto de cada entrada e mantém o maior ``seq`` visto por origem (um
+    vetor de versões), usado para detectar deltas perdidos e pedi-los de
+    volta via ``SYNC_PULL`` (main.tex §7.2). O ``seq`` só DETECTA perda; o
+    desempate de conflito continua sendo LWW por timestamp.
+    """
 
     type: Literal["SYNC_TABLE"] = "SYNC_TABLE"
     origem: str
+    seq: int  # contador monotônico do tracker de origem — main.tex §7.2
     timestamp: float
     entries: list[SyncTableEntry]
 
 
-class FullSyncPeer(BaseModel):
-    """Peer dentro de uma entrada de FULL_SYNC (com flag ativo e timestamp).
+class SyncDigest(BaseModel):
+    """Digest de versões (tracker -> tracker, periódico) — main.tex §7.2.
 
-    ``origem`` é o tracker que produziu a escrita; viaja no FULL_SYNC para
-    que o receptor aplique o desempate do LWW de forma determinística (mesmo
-    critério do ``SyncTableEntry``). Default ``""`` mantém compatibilidade
-    com remetentes que ainda não preenchem o campo.
+    Em vez de reenviar o estado completo, cada tracker anuncia só o seu vetor
+    de versões: o maior ``seq`` que conhece de cada origem (inclusive o
+    próprio). O receptor compara componente a componente e, onde o emissor
+    estiver à frente, pede os deltas faltantes via ``SYNC_PULL``. Cobre o
+    ponto cego da detecção inline: quando a última escrita de um tracker se
+    perde e ele fica em silêncio, não há ``seq`` posterior para revelar a
+    lacuna.
     """
 
-    nome_peer: str
-    ip: str
-    porta: int
-    ativo: bool
-    timestamp: float
-    origem: str = ""
-
-
-class FullSyncEntry(BaseModel):
-    """Entrada de FULL_SYNC: arquivo + peers conhecidos."""
-
-    hash: str
-    nome: str
-    tamanho: int
-    n_chunks: int
-    peers: list[FullSyncPeer]
-
-
-class FullSyncTracker(BaseModel):
-    """Tracker dentro da lista ``trackers_conhecidos`` de um FULL_SYNC."""
-
-    tracker_id: str
-    ip: str
-    porta: int
-
-
-class FullSync(BaseModel):
-    """Sincronização completa do índice (tracker -> tracker)."""
-
-    type: Literal["FULL_SYNC"] = "FULL_SYNC"
+    type: Literal["SYNC_DIGEST"] = "SYNC_DIGEST"
     origem: str
-    entries: list[FullSyncEntry]
-    trackers_conhecidos: list[FullSyncTracker]
+    versoes: dict[str, int]  # maior seq conhecido por origem
+
+
+class SyncPullItem(BaseModel):
+    """Um pedido de deltas de uma origem, a partir de ``desde_seq``."""
+
+    origem: str
+    desde_seq: int
+
+
+class SyncPull(BaseModel):
+    """Pedido de deltas faltantes (tracker -> tracker) — main.tex §7.2.
+
+    Disparado pela detecção inline (lacuna de ``seq`` num ``SYNC_TABLE``),
+    pela comparação de digests, ou pela reintegração. Pede, para cada origem,
+    tudo o que o destinatário originou com ``seq`` acima de ``desde_seq``.
+    ``desde_seq=0`` pede o estado inteiro daquela origem — é assim que um
+    tracker reintegrado reconstrói o índice. A resposta vem como uma ou mais
+    mensagens ``SYNC_TABLE`` (um evento por ``seq``), na mesma conexão TCP do
+    pedido e incluindo tombstones (``ativo=False``).
+    """
+
+    type: Literal["SYNC_PULL"] = "SYNC_PULL"
+    faltando: list[SyncPullItem]
 
 
 # ---------------------------------------------------------------------------
@@ -263,12 +266,36 @@ class FullSync(BaseModel):
 
 
 class TrackerRejoin(BaseModel):
-    """Novo tracker se apresentando ao bootstrap node (tracker -> tracker)."""
+    """Novo tracker se apresentando ao bootstrap node (tracker -> tracker).
+
+    O bootstrap responde com ``TRACKER_LIST``. O índice em si o tracker que
+    volta reconstrói sozinho, com ``SYNC_PULL(desde_seq=0)`` de cada origem
+    conhecida (main.tex §7.2 e §12.3).
+    """
 
     type: Literal["TRACKER_REJOIN"] = "TRACKER_REJOIN"
     tracker_id: str
     ip: str
     porta: int
+
+
+class TrackerListItem(BaseModel):
+    """Tracker ativo dentro de ``trackers_conhecidos`` de um ``TRACKER_LIST``."""
+
+    tracker_id: str
+    ip: str
+    porta: int  # sync_port do tracker (destino de SYNC_PULL/SYNC_TABLE)
+
+
+class TrackerList(BaseModel):
+    """Resposta do bootstrap ao ``TRACKER_REJOIN`` (tracker -> tracker).
+
+    Devolve apenas a lista atual de trackers ativos; não carrega o índice,
+    que é reconstruído à parte via ``SYNC_PULL(desde_seq=0)`` (main.tex §7.2).
+    """
+
+    type: Literal["TRACKER_LIST"] = "TRACKER_LIST"
+    trackers_conhecidos: list[TrackerListItem]
 
 
 class TrackerAnnounceNew(BaseModel):
@@ -314,7 +341,7 @@ class ErrorMessage(BaseModel):
 # Registro de tipos válidos e validação em runtime
 # ---------------------------------------------------------------------------
 
-#: Mapa de ``type`` -> modelo pydantic correspondente (os 19 do Listing 7.2).
+#: Mapa de ``type`` -> modelo pydantic correspondente (os 21 do Listing 7.2).
 MESSAGE_MODELS: dict[str, type[BaseModel]] = {
     "PEER_HELLO": PeerHello,
     "PEER_LEAVE": PeerLeave,
@@ -330,8 +357,10 @@ MESSAGE_MODELS: dict[str, type[BaseModel]] = {
     "CHUNK_DATA": ChunkDataHeader,
     "PEER_LEAVE_FILE": PeerLeaveFile,
     "SYNC_TABLE": SyncTable,
-    "FULL_SYNC": FullSync,
+    "SYNC_DIGEST": SyncDigest,
+    "SYNC_PULL": SyncPull,
     "TRACKER_REJOIN": TrackerRejoin,
+    "TRACKER_LIST": TrackerList,
     "TRACKER_ANNOUNCE": TrackerAnnounce,
     "REASSIGN_TRACKER": ReassignTracker,
     "ERROR": ErrorMessage,

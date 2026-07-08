@@ -1,21 +1,26 @@
 """Entrypoint do tracker: ``python -m src.tracker.main --config config/tracker-1.yaml``.
 
-Sobe, no MESMO processo Python (§8 da tarefa da Fase 4):
+Sobe, no MESMO processo Python (§8 da tarefa):
 
 * a API REST (FastAPI/uvicorn) na ``api_port`` — atendimento aos peers;
-* o servidor TCP de sincronização (``SyncServer``) na ``sync_port``,
-  em thread própria — flooding ``SYNC_TABLE`` e ``SEARCH_FORWARD``;
+* o servidor TCP de sincronização (``SyncServer``) na ``sync_port``, em thread
+  própria — flooding ``SYNC_TABLE``, ``SYNC_PULL``, ``SYNC_DIGEST`` e
+  ``SEARCH_FORWARD``;
 * o ``TombstoneReaper`` (expiração de tombstones a cada 60s);
-* o ``AntiEntropyReconciler`` (push periódico de ``FULL_SYNC`` aos demais
-  trackers — reconciliação anti-entropy que repara deltas perdidos).
+* o ``DigestBroadcaster`` (push periódico de ``SYNC_DIGEST`` — backstop que
+  repara o último delta perdido, main.tex §11.3).
 
-O failure detector e a reintegração (``TRACKER_REJOIN``) chegam na Fase 5.
+Um tracker não-bootstrap, ao subir, ainda se reintegra à rede em background:
+``TRACKER_REJOIN`` ao bootstrap, ``TRACKER_LIST`` de volta e ``SYNC_PULL(0)`` por
+origem para reconstruir o índice (main.tex §12.3). O failure detector e o
+rebalanceamento por ``REASSIGN_TRACKER`` seguem para a Fase 5.
 """
 
 from __future__ import annotations
 
 import argparse
 import logging
+import threading
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any
@@ -24,7 +29,7 @@ import uvicorn
 
 from src.common.config import load_yaml, require_keys
 from src.common.logging_config import setup_logging
-from src.tracker.anti_entropy import AntiEntropyReconciler
+from src.tracker.anti_entropy import DigestBroadcaster
 from src.tracker.api import create_app
 from src.tracker.index import Index
 from src.tracker.persistence import init_db
@@ -60,12 +65,13 @@ class TrackerSettings:
     db_path: Path
     log_path: Path
     log_level: str
-    # Constantes operacionais (usadas nas Fases 4 e 5).
+    # Constantes operacionais.
     seed_report_timeout_seconds: int = 360
     tombstone_retention_seconds: int = 600
     sync_outbound_timeout_seconds: int = 3
     search_forward_timeout_seconds: int = 2
-    anti_entropy_interval_seconds: int = 180  # 3 min; < retenção do tombstone (600s)
+    # Digest periódico (main.tex §11.3): 5 min, < retenção do tombstone (600s).
+    digest_interval_seconds: int = 300
 
 
 def load_tracker_settings(config_path: Path) -> TrackerSettings:
@@ -92,9 +98,7 @@ def load_tracker_settings(config_path: Path) -> TrackerSettings:
         search_forward_timeout_seconds=int(
             cfg.get("search_forward_timeout_seconds", 2)
         ),
-        anti_entropy_interval_seconds=int(
-            cfg.get("anti_entropy_interval_seconds", 180)
-        ),
+        digest_interval_seconds=int(cfg.get("digest_interval_seconds", 300)),
     )
 
 
@@ -156,6 +160,7 @@ def main(argv: list[str] | None = None) -> None:
     sync_client = SyncClient(
         tracker_id=settings.tracker_id,
         known_trackers=known_trackers,
+        index=index,
         timeout_seconds=settings.sync_outbound_timeout_seconds,
     )
     search_router = SearchRouter(
@@ -169,6 +174,7 @@ def main(argv: list[str] | None = None) -> None:
         ip=settings.ip,
         sync_port=settings.sync_port,
         index=index,
+        sync_client=sync_client,
     )
     sync_server.start()
     reaper = TombstoneReaper(
@@ -177,13 +183,23 @@ def main(argv: list[str] | None = None) -> None:
         retention_seconds=settings.tombstone_retention_seconds,
     )
     reaper.start()
-    reconciler = AntiEntropyReconciler(
+    broadcaster = DigestBroadcaster(
         tracker_id=settings.tracker_id,
         index=index,
         sync_client=sync_client,
-        interval_seconds=settings.anti_entropy_interval_seconds,
+        interval_seconds=settings.digest_interval_seconds,
     )
-    reconciler.start()
+    broadcaster.start()
+    # Reintegração em background: TRACKER_REJOIN -> TRACKER_LIST -> SYNC_PULL(0)
+    # pelo primeiro conhecido reachable, sem bloquear a subida da API (main.tex
+    # §12.3). Quem sobe primeiro não acha ninguém e segue com índice vazio,
+    # reconstruído aos poucos via SEED_REPORT / SYNC_DIGEST.
+    threading.Thread(
+        target=sync_client.reintegrar,
+        args=(settings.ip, settings.sync_port),
+        name=f"rejoin-{settings.tracker_id}",
+        daemon=True,
+    ).start()
 
     app = create_app(
         index=index,
@@ -197,7 +213,7 @@ def main(argv: list[str] | None = None) -> None:
         # log_config=None: mantém o logging configurado pelo setup_logging.
         uvicorn.run(app, host=settings.ip, port=settings.api_port, log_config=None)
     finally:
-        reconciler.stop()
+        broadcaster.stop()
         reaper.stop()
         sync_server.stop()
 

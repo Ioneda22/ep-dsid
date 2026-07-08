@@ -268,7 +268,9 @@ def test_apply_sync_entry_registra_fonte_remota(indice: Index) -> None:
         tamanho=5_000_000,
         n_chunks=20,
     )
-    assert indice.apply_sync_entry(entry, origem_tracker="tracker-2", timestamp=900.0)
+    assert indice.apply_sync_entry(
+        entry, origem_tracker="tracker-2", timestamp=900.0, seq=1
+    )
     fontes = indice.get_peers_for_hash(HASH_A)
     assert [(p.nome_peer, p.ip, p.porta) for p in fontes] == [
         ("bob", "127.0.0.1", 7002)
