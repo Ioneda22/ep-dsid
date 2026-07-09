@@ -115,7 +115,7 @@ def main(argv: list[str] | None = None) -> None:
     args = parser.parse_args(argv)
 
     settings = load_peer_settings(args.config)
-    setup_logging(settings.log_path, settings.log_level)
+    setup_logging(settings.log_path, settings.log_level, console=False)
     logger.info(
         "nome_peer=%s subindo em %s:%d (storage=%s)",
         settings.nome_peer,

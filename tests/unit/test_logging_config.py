@@ -48,15 +48,59 @@ def test_setup_logging_idempotente(tmp_path: Path) -> None:
     setup_logging(log_path, level="INFO")
     setup_logging(log_path, level="INFO")
 
-    handlers_peerspot = [
-        h
-        for h in logging.getLogger().handlers
-        if getattr(h, "_peerspot_handler", False)
-    ]
-    assert len(handlers_peerspot) == 2  # 1 arquivo + 1 stderr
+    assert len(_handlers_peerspot()) == 2  # 1 arquivo + 1 stderr
 
 
 def test_setup_logging_nivel_invalido(tmp_path: Path) -> None:
     """Um nível de log desconhecido faz setup_logging levantar ValueError."""
     with pytest.raises(ValueError, match="inválido"):
         setup_logging(tmp_path / "x.log", level="VERBOSO")
+
+
+def test_setup_logging_sem_console_nao_anexa_handler_de_stderr(tmp_path: Path) -> None:
+    """console=False deixa só o handler de arquivo no logger raiz."""
+    setup_logging(tmp_path / "peer.log", level="INFO", console=False)
+
+    handlers = _handlers_peerspot()
+    assert len(handlers) == 1
+    assert isinstance(handlers[0], logging.FileHandler)
+
+
+def test_setup_logging_sem_console_nao_escreve_no_stderr(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """Regressão: exceção de thread de fundo do peer não vaza para o terminal
+    da CLI (corrompia o prompt do input()); vai só para o arquivo de log."""
+    log_path = tmp_path / "peer.log"
+    setup_logging(log_path, level="INFO", console=False)
+
+    try:
+        raise RuntimeError("nenhum dos 3 trackers respondeu")
+    except RuntimeError:
+        logging.getLogger("seed-reporter").exception("falha ao enviar SEED_REPORT")
+
+    for h in logging.getLogger().handlers:
+        h.flush()
+
+    assert capsys.readouterr().err == ""
+    assert "falha ao enviar SEED_REPORT" in log_path.read_text(encoding="utf-8")
+
+
+def test_setup_logging_com_console_escreve_no_stderr(
+    tmp_path: Path, capsys: pytest.CaptureFixture[str]
+) -> None:
+    """O tracker (sem CLI) continua vendo os logs no terminal."""
+    setup_logging(tmp_path / "tracker.log", level="INFO", console=True)
+
+    logging.getLogger("tracker").info("sync server escutando")
+
+    assert "sync server escutando" in capsys.readouterr().err
+
+
+def _handlers_peerspot() -> list[logging.Handler]:
+    """Handlers anexados pelo setup_logging (marcados com _peerspot_handler)."""
+    return [
+        h
+        for h in logging.getLogger().handlers
+        if getattr(h, "_peerspot_handler", False)
+    ]
