@@ -4,28 +4,28 @@ Sistema distribuído **P2P não estruturado hierárquico** para compartilhamento
 arquivos de áudio, desenvolvido para a disciplina **Desenvolvimento de Sistemas de
 Informação Distribuídos** (EACH-USP).
 
-Os **peers** armazenam e transferem arquivos em *chunks* diretamente entre si; os
+Os **peers** armazenam e transferem arquivos em _chunks_ diretamente entre si; os
 **trackers (super peers)** mantêm um índice global **replicado** e sincronizado via
-*flooding* sobre TCP, com resolução de conflitos por *Last Write Wins* e reconciliação
-*anti-entropy*. A especificação completa está em [`main.tex`](main.tex) e o guia de
+_flooding_ sobre TCP, com resolução de conflitos por _Last Write Wins_ e reconciliação
+_anti-entropy_. A especificação completa está em [`main.tex`](main.tex) e o guia de
 implementação em [`CLAUDE.md`](CLAUDE.md).
 
 ---
 
 ## 1. Tecnologias
 
-| Camada | Tecnologia |
-|---|---|
-| Linguagem | **Python 3.11+** (type hints, `match/case`) |
-| API peer ↔ tracker | **FastAPI** + **Uvicorn** (REST sobre HTTP) |
-| Tracker ↔ tracker | **sockets TCP brutos** (`socket` + `threading`) |
-| Peer ↔ peer | **sockets TCP brutos** (header JSON + payload binário) |
-| Persistência durável | **SQLite** (`sqlite3`, usuários e playlists) |
-| Índice do tracker | `dict` + `threading.Lock()` (em memória) |
-| Hashing | `hashlib.sha256` |
-| Mensagens do protocolo | **pydantic v2** |
-| Configuração | **YAML** (`pyyaml`) |
-| Testes | **pytest** + `httpx` |
+| Camada                 | Tecnologia                                             |
+| ---------------------- | ------------------------------------------------------ |
+| Linguagem              | **Python 3.11+** (type hints, `match/case`)            |
+| API peer ↔ tracker     | **FastAPI** + **Uvicorn** (REST sobre HTTP)            |
+| Tracker ↔ tracker      | **sockets TCP brutos** (`socket` + `threading`)        |
+| Peer ↔ peer            | **sockets TCP brutos** (header JSON + payload binário) |
+| Persistência durável   | **SQLite** (`sqlite3`, usuários e playlists)           |
+| Índice do tracker      | `dict` + `threading.Lock()` (em memória)               |
+| Hashing                | `hashlib.sha256`                                       |
+| Mensagens do protocolo | **pydantic v2**                                        |
+| Configuração           | **YAML** (`pyyaml`)                                    |
+| Testes                 | **pytest** + `httpx`                                   |
 
 > **Sem Docker.** A rede distribuída é simulada abrindo **um terminal por nó**, cada
 > processo em `127.0.0.1` numa porta distinta.
@@ -150,14 +150,14 @@ python -m src.peer.main --config config/peer-carol.yaml
 
 ### 4.3. Portas usadas
 
-| Nó | API (REST) | Sync (TCP) | TCP de chunks |
-|---|---|---|---|
-| tracker-1 (bootstrap) | 8001 | 9001 | — |
-| tracker-2 | 8002 | 9002 | — |
-| tracker-3 | 8003 | 9003 | — |
-| alice | — | — | 7001 |
-| bob | — | — | 7002 |
-| carol | — | — | 7003 |
+| Nó                    | API (REST) | Sync (TCP) | TCP de chunks |
+| --------------------- | ---------- | ---------- | ------------- |
+| tracker-1 (bootstrap) | 8001       | 9001       | —             |
+| tracker-2             | 8002       | 9002       | —             |
+| tracker-3             | 8003       | 9003       | —             |
+| alice                 | —          | —          | 7001          |
+| bob                   | —          | —          | 7002          |
+| carol                 | —          | —          | 7003          |
 
 ---
 
@@ -191,41 +191,52 @@ quit                          sai ordenadamente (envia PEER_LEAVE)
 Com os **6 nós no ar** (seção 4, bootstrap primeiro):
 
 1. **Upload na alice** — no terminal da alice:
+
    ```
    alice> upload caminho/para/musica.mp3
    ```
+
    Anote o `hash` impresso. Em `tracker-1` o arquivo é registrado e propagado aos
    demais em menos de 3 s.
 
 2. **Busca no bob** — no terminal do bob:
+
    ```
    bob> search musica
    ```
+
    O resultado lista o `hash`, o número de chunks e as fontes (só `alice` por enquanto).
 
 3. **Download no bob:**
+
    ```
    bob> download <hash>
    ```
+
    Ao concluir (SHA-256 validado), o bob **se re-registra como nova fonte**.
 
 4. **Confirmar no bob:**
+
    ```
    bob> list
    ```
+
    O arquivo baixado aparece.
 
 5. **Download na carol** — no terminal da carol:
+
    ```
    carol> search musica
    carol> download <hash>
    ```
+
    Agora há **duas fontes** (`alice` e `bob`); a carol distribui os chunks entre elas
-   em paralelo (*rarest-first*).
+   em paralelo (_rarest-first_).
 
 6. **Fallback de tracker** — `Ctrl+C` no terminal do `tracker-1`. Na próxima operação
    da alice (que estava conectada ao `tracker-1`), o peer **migra sozinho** para o
    `tracker-2` da sua lista:
+
    ```
    alice> search musica       # dispara o fallback; status confirma o novo tracker
    alice> status
@@ -239,15 +250,17 @@ Com os **6 nós no ar** (seção 4, bootstrap primeiro):
    (`REASSIGN_TRACKER`).
 
 8. **Remoção de música** — na alice:
+
    ```
    alice> remove <hash>
    ```
-   Em menos de 3 s os trackers registram um *tombstone*; o `bob` continua aparecendo
+
+   Em menos de 3 s os trackers registram um _tombstone_; o `bob` continua aparecendo
    como fonte.
 
 9. **Falha desordenada de peer** — feche o terminal do `bob` **abruptamente** (sem
    `quit`). Após **6 minutos** (2 rodadas de `SEED_REPORT` perdidas), os trackers
-   marcam as entradas do `bob` como *tombstone* pelo *failure detector*.
+   marcam as entradas do `bob` como _tombstone_ pelo _failure detector_.
 
 ---
 
@@ -289,7 +302,7 @@ dinâmicas) roda em menos de 60 s.
 
 ## 9. Resetar o ambiente
 
-Todo o estado de runtime vive em `data/` e `logs/` (ambos *gitignored*). Para um
+Todo o estado de runtime vive em `data/` e `logs/` (ambos _gitignored_). Para um
 recomeço limpo, basta apagá-los:
 
 ```bash
@@ -304,15 +317,15 @@ Eles são recriados automaticamente na próxima execução.
 
 - **Playlists não são replicadas entre trackers.** São dados de usuário (SQLite
   durável), locais ao tracker onde foram criadas — apenas o índice de arquivos
-  (`nome→hash`, `hash→peers`) é *full-replicated*. Uma playlist criada no `tracker-1`
-  não é visível no `tracker-2`, e não acompanha o peer em caso de *fallback* ou
-  *reassign*.
+  (`nome→hash`, `hash→peers`) é _full-replicated_. Uma playlist criada no `tracker-1`
+  não é visível no `tracker-2`, e não acompanha o peer em caso de _fallback_ ou
+  _reassign_.
 - **Lista de trackers do peer é estática** (definida no YAML). A adição dinâmica de
   trackers à lista de fallback do peer não é suportada; a limitação está registrada na
   especificação (`main.tex`, §"Sobre a lista TRACKERS no peer").
 - **Sem garantia de replicação mínima de arquivos.** A replicação de conteúdo é
   orientada a demanda: um arquivo fica indisponível se o seu único peer sai da rede.
-- **Modelo de falha *crash* (fail-stop).** Não há tolerância a falhas bizantinas nem
+- **Modelo de falha _crash_ (fail-stop).** Não há tolerância a falhas bizantinas nem
   autenticação de peers — fora do escopo do projeto.
 
 ---
