@@ -1,21 +1,17 @@
-# config/tracker-3.yaml — §6.6 do CLAUDE.md
-# Execução local: todos os nós em 127.0.0.1; cada tracker usa um par de
-# portas distinto (api_port e sync_port). Paths relativos à raiz do projeto.
 tracker_id: tracker-3
 ip: 127.0.0.1
-api_port: 8003          # FastAPI (REST com peers)
-sync_port: 9003         # TCP (sincronização)
-is_bootstrap: false     # apenas tracker-1 é bootstrap
-known_trackers:  # api_port também: o rebalance diz ao peer cedido onde se reportar (§6.5)
+api_port: 8003
+sync_port: 9003
+is_bootstrap: false
+known_trackers:
   - { tracker_id: tracker-1, ip: 127.0.0.1, sync_port: 9001, api_port: 8001 }
   - { tracker_id: tracker-2, ip: 127.0.0.1, sync_port: 9002, api_port: 8002 }
 db_path: data/tracker-3/peerspot.db
 log_path: logs/tracker-3.log
 log_level: INFO
 
-# Constantes operacionais
-seed_report_timeout_seconds: 360       # 6 min = 2 rodadas perdidas
-tombstone_retention_seconds: 600       # 10 min
+seed_report_timeout_seconds: 360
+tombstone_retention_seconds: 600
 sync_outbound_timeout_seconds: 3
 search_forward_timeout_seconds: 2
-digest_interval_seconds: 300           # 5 min; SYNC_DIGEST entre trackers (< retenção do tombstone, 600s)
+digest_interval_seconds: 300
