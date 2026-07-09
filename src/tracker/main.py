@@ -1,19 +1,20 @@
-"""Entrypoint do tracker: ``python -m src.tracker.main --config config/tracker-1.yaml``.
+"""Entrypoint do tracker: python -m src.tracker.main --config config/tracker-1.yaml.
 
-Sobe, no MESMO processo Python (§8 da tarefa):
+Sobe, no MESMO processo Python:
 
-* a API REST (FastAPI/uvicorn) na ``api_port`` — atendimento aos peers;
-* o servidor TCP de sincronização (``SyncServer``) na ``sync_port``, em thread
-  própria — flooding ``SYNC_TABLE``, ``SYNC_PULL``, ``SYNC_DIGEST`` e
-  ``SEARCH_FORWARD``;
-* o ``TombstoneReaper`` (expiração de tombstones a cada 60s);
-* o ``DigestBroadcaster`` (push periódico de ``SYNC_DIGEST`` — backstop que
-  repara o último delta perdido, main.tex §11.3).
+* a API REST (FastAPI/uvicorn) na api_port — atendimento aos peers;
+* o servidor TCP de sincronização (SyncServer) na sync_port, em thread
+  própria — flooding SYNC_TABLE, SYNC_PULL, SYNC_DIGEST e
+  SEARCH_FORWARD;
+* o TombstoneReaper (expiração de tombstones a cada 60s);
+* o DigestBroadcaster (push periódico de SYNC_DIGEST — backstop que
+  repara o último delta perdido de um tracker que ficou em silêncio);
+* o FailureDetector (tombstona as fontes de um peer sem SEED_REPORT por
+  tempo demais) e o RebalanceManager (cede peers via REASSIGN_TRACKER).
 
 Um tracker não-bootstrap, ao subir, ainda se reintegra à rede em background:
-``TRACKER_REJOIN`` ao bootstrap, ``TRACKER_LIST`` de volta e ``SYNC_PULL(0)`` por
-origem para reconstruir o índice (main.tex §12.3). O failure detector e o
-rebalanceamento por ``REASSIGN_TRACKER`` seguem para a Fase 5.
+TRACKER_REJOIN ao bootstrap, TRACKER_LIST de volta e SYNC_PULL(0) por
+origem para reconstruir o índice, sem bloquear a subida da API.
 """
 
 from __future__ import annotations
@@ -56,7 +57,7 @@ _CHAVES_OBRIGATORIAS = (
 
 @dataclass
 class TrackerSettings:
-    """Configuração de um tracker carregada do YAML (§6.6)."""
+    """Configuração de um tracker carregada do YAML."""
 
     tracker_id: str
     ip: str
@@ -72,7 +73,7 @@ class TrackerSettings:
     tombstone_retention_seconds: int = 600
     sync_outbound_timeout_seconds: int = 3
     search_forward_timeout_seconds: int = 2
-    # Digest periódico (main.tex §11.3): 5 min, < retenção do tombstone (600s).
+    # Digest periódico: 5 min, < retenção do tombstone (600s).
     digest_interval_seconds: int = 300
 
 
@@ -105,7 +106,7 @@ def load_tracker_settings(config_path: Path) -> TrackerSettings:
 
 
 def _trackers_conhecidos(settings: TrackerSettings) -> list[dict[str, Any]]:
-    """Lista exposta em ``GET /trackers``: este tracker + os do YAML."""
+    """Lista exposta em GET /trackers: este tracker + os do YAML."""
     proprio = {
         "tracker_id": settings.tracker_id,
         "ip": settings.ip,
@@ -116,9 +117,9 @@ def _trackers_conhecidos(settings: TrackerSettings) -> list[dict[str, Any]]:
 
 
 def _api_por_tracker_id(settings: TrackerSettings) -> dict[str, tuple[str, int]]:
-    """Mapa ``tracker_id -> (ip, api_port)`` para o rebalance apontar peers (§6.5).
+    """Mapa tracker_id -> (ip, api_port) para o rebalance apontar peers.
 
-    Inclui este tracker e os ``known_trackers`` do YAML que declararem ``api_port``
+    Inclui este tracker e os known_trackers do YAML que declararem api_port
     (necessário para dizer ao peer cedido onde se reportar via REST).
     """
     mapa: dict[str, tuple[str, int]] = {
@@ -134,7 +135,7 @@ def _api_por_tracker_id(settings: TrackerSettings) -> dict[str, tuple[str, int]]
 
 
 def _known_trackers_sync(settings: TrackerSettings) -> list[KnownTracker]:
-    """Converte os ``known_trackers`` do YAML em destinos de sincronização.
+    """Converte os known_trackers do YAML em destinos de sincronização.
 
     Raises:
         ConfigError: Se alguma entrada não tiver tracker_id/ip/sync_port.
@@ -225,9 +226,9 @@ def main(argv: list[str] | None = None) -> None:
     )
     broadcaster.start()
     # Reintegração em background: TRACKER_REJOIN -> TRACKER_LIST -> SYNC_PULL(0)
-    # pelo primeiro conhecido reachable, sem bloquear a subida da API (main.tex
-    # §12.3). Quem sobe primeiro não acha ninguém e segue com índice vazio,
-    # reconstruído aos poucos via SEED_REPORT / SYNC_DIGEST.
+    # pelo primeiro conhecido reachable, sem bloquear a subida da API. Quem sobe
+    # primeiro não acha ninguém e segue com índice vazio, reconstruído aos poucos
+    # via SEED_REPORT / SYNC_DIGEST.
     threading.Thread(
         target=sync_client.reintegrar,
         args=(settings.ip, settings.sync_port),

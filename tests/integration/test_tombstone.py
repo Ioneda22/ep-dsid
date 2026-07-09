@@ -1,7 +1,7 @@
-"""Testes de tombstone: marcação via SYNC_TABLE e expiração (§6.2).
+"""Testes de tombstone: marcação de remoção via SYNC_TABLE e expiração após a retenção.
 
-Relógio injetado (§10): o tempo "avança" sem dormir. A varredura periódica
-(``TombstoneReaper``) é testada com intervalo curto de verdade, mas a regra
+Relógio injetado: o tempo "avança" sem dormir. A varredura periódica
+(TombstoneReaper) é testada com intervalo curto de verdade, mas a regra
 de idade continua vindo do relógio fake.
 """
 
@@ -15,11 +15,11 @@ from src.tracker.tombstone import TombstoneReaper
 from tests.integration.cluster import aguardar
 
 HASH = "a" * 64
-RETENCAO = 600.0  # 10 min — §6.2
+RETENCAO = 600.0  # 10 min: janela de retenção do tombstone antes do descarte
 
 
 class RelogioFake:
-    """Relógio determinístico injetado no Index (§10)."""
+    """Relógio determinístico injetado no Index para tornar os testes de idade determinísticos."""
 
     def __init__(self, inicio: float = 1000.0) -> None:
         self.agora = inicio

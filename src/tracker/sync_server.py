@@ -1,26 +1,24 @@
-"""Servidor TCP de sincronização entre trackers (§6.1, camada 4).
+"""Servidor TCP de sincronização entre trackers.
 
-Espelha o ``servidor_sync``/``tratar_conexao`` do Listing 8.1 do
-``main.tex``: ``socket`` + ``threading`` — NUNCA asyncio (§11.2). Escuta na
-``sync_port`` dedicada (default 9001), SEPARADO do servidor FastAPI da
-``api_port``; ambos vivem no mesmo processo Python, em threads distintas.
+Usa socket + threading (nunca asyncio) e escuta na sync_port
+dedicada (default 9001), SEPARADO do servidor FastAPI da api_port; ambos
+vivem no mesmo processo Python, em threads distintas.
 
 Mensagens atendidas:
 
-* ``SYNC_TABLE`` — avança o vetor de versões, detecta lacuna de ``seq`` e
-  aplica cada entry via ``Index.apply_sync_entry`` (LWW). Havendo lacuna,
-  dispara ``SYNC_PULL`` para a origem (detecção inline, main.tex §11.3);
-* ``SYNC_PULL`` — devolve, na MESMA conexão, uma ou mais ``SYNC_TABLE`` com o
-  que a origem pedida originou acima de ``desde_seq`` (reparo direcionado);
-* ``SYNC_DIGEST`` — compara o vetor de versões recebido com o local e puxa via
-  ``SYNC_PULL`` o que o emissor tiver a mais (backstop periódico);
-* ``SEARCH_FORWARD`` — busca local e devolve ``SEARCH_RESULT`` na mesma
-  conexão (ver ``src.tracker.routing``);
-* ``TRACKER_REJOIN`` — o tracker que recebe (o primeiro conhecido que aceitou a
-  conexão do que volta) responde ``TRACKER_LIST`` e propaga ``TRACKER_ANNOUNCE``;
-  o índice o tracker que volta reconstrói via ``SYNC_PULL(desde_seq=0)``
-  (main.tex §12.3);
-* ``TRACKER_ANNOUNCE`` — acrescenta o novo tracker à membership local.
+* SYNC_TABLE — avança o vetor de versões, detecta lacuna de seq e
+  aplica cada entry via Index.apply_sync_entry (LWW). Havendo lacuna,
+  dispara SYNC_PULL para a origem (detecção inline);
+* SYNC_PULL — devolve, na MESMA conexão, uma ou mais SYNC_TABLE com o
+  que a origem pedida originou acima de desde_seq (reparo direcionado);
+* SYNC_DIGEST — compara o vetor de versões recebido com o local e puxa via
+  SYNC_PULL o que o emissor tiver a mais (backstop periódico);
+* SEARCH_FORWARD — busca local e devolve SEARCH_RESULT na mesma
+  conexão (ver src.tracker.routing);
+* TRACKER_REJOIN — o tracker que recebe (o primeiro conhecido que aceitou a
+  conexão do que volta) responde TRACKER_LIST e propaga TRACKER_ANNOUNCE;
+  o índice o tracker que volta reconstrói via SYNC_PULL(desde_seq=0);
+* TRACKER_ANNOUNCE — acrescenta o novo tracker à membership local.
 """
 
 from __future__ import annotations
@@ -58,10 +56,10 @@ logger = logging.getLogger(__name__)
 
 
 class SyncServer:
-    """Servidor TCP de ``sync_port``: aceita conexões em loop, uma thread cada.
+    """Servidor TCP de sync_port: aceita conexões em loop, uma thread cada.
 
-    ``sync_port=0`` deixa o SO escolher uma porta livre (testes); o valor
-    efetivo fica em ``porta`` após ``start``. O ``sync_client`` (para disparar
+    sync_port=0 deixa o SO escolher uma porta livre (testes); o valor
+    efetivo fica em porta após start. O sync_client (para disparar
     pulls e propagar anúncios) pode ser passado no construtor ou atribuído
     depois — a ordem de criação no cluster resolve as portas dinâmicas antes de
     montar os clientes.
@@ -92,7 +90,7 @@ class SyncServer:
         self._srv: socket.socket | None = None
 
     def start(self) -> None:
-        """Faz bind/listen e dispara a thread de ``accept`` (Listing 8.1)."""
+        """Faz bind/listen e dispara a thread de accept."""
         srv = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
         srv.setsockopt(socket.SOL_SOCKET, socket.SO_REUSEADDR, 1)
         srv.bind((self.ip, self.porta))
@@ -119,7 +117,7 @@ class SyncServer:
             self._srv.close()
 
     # ------------------------------------------------------------------
-    # Loop de accept e tratamento de conexão (Listing 8.1)
+    # Loop de accept e tratamento de conexão
     # ------------------------------------------------------------------
 
     def _loop_accept(self) -> None:
@@ -144,8 +142,8 @@ class SyncServer:
     def _tratar_conexao(self, conn: socket.socket, addr: tuple[str, int]) -> None:
         """Lê mensagens da conexão até o remetente fechar e as despacha.
 
-        O loop suporta o one-shot do flooding (uma ``SYNC_TABLE``/``SYNC_DIGEST``
-        e fecha), o request/response do ``SEARCH_FORWARD`` e o ``SYNC_PULL``
+        O loop suporta o one-shot do flooding (uma SYNC_TABLE/SYNC_DIGEST
+        e fecha), o request/response do SEARCH_FORWARD e o SYNC_PULL
         (após responder, ESTE lado fecha para sinalizar o fim das respostas).
         """
         with conn:
@@ -177,7 +175,7 @@ class SyncServer:
     def _despachar(
         self, header: dict[str, object], conn: socket.socket, addr: tuple[str, int]
     ) -> bool:
-        """Despacha uma mensagem. Retorna ``False`` para encerrar a conexão."""
+        """Despacha uma mensagem. Retorna False para encerrar a conexão."""
         tipo = header.get("type")
         try:
             if tipo == "SYNC_TABLE":
@@ -219,12 +217,12 @@ class SyncServer:
         msg = SyncTable.model_validate(header)
         if msg.origem == self.tracker_id:
             # Eco do próprio envio: o tracker_id em 'origem' existe exatamente
-            # para evitar reprocessamento — main.tex §10 (Nomeação).
+            # para evitar reprocessar o que este tracker mesmo originou.
             logger.debug("tracker_id=%s ignorou eco de SYNC_TABLE", self.tracker_id)
             return
         # Detecta lacuna e avança o vetor de versões ANTES de aplicar: escritas
         # fora de ordem são aplicadas na hora; o desde_seq da pendência é o
-        # visto capturado agora (main.tex §11.3).
+        # visto capturado agora.
         desde = self.index.registrar_recepcao_flood(msg.origem, msg.seq)
         aplicadas = sum(
             self.index.apply_sync_entry(entry, msg.origem, msg.timestamp, msg.seq)
@@ -305,7 +303,7 @@ class SyncServer:
     def _tratar_tracker_rejoin(
         self, header: dict[str, object], conn: socket.socket
     ) -> None:
-        """Responde ``TRACKER_LIST`` e propaga ``TRACKER_ANNOUNCE`` (main.tex §12.3).
+        """Responde TRACKER_LIST e propaga TRACKER_ANNOUNCE.
 
         Qualquer tracker que aceite a conexão atua como ponto de entrada do que
         volta (o bootstrap é o primeiro conhecido reachable, não um nó fixo).
@@ -345,12 +343,12 @@ class SyncServer:
         logger.info("TRACKER_ANNOUNCE: tracker %s agora conhecido", novo.tracker_id)
 
     def _ceder_peers(self, novo_tracker_id: str) -> None:
-        """Agenda a cessão de peers locais ao tracker reintegrado (rebalance, §6.5)."""
+        """Agenda a cessão de peers locais ao tracker reintegrado (rebalance)."""
         if self.rebalance is not None:
             self.rebalance.ceder_peers_para(novo_tracker_id)
 
     def _trackers_ativos(self) -> list[TrackerListItem]:
-        """Membership atual (este tracker + os conhecidos) para o ``TRACKER_LIST``."""
+        """Membership atual (este tracker + os conhecidos) para o TRACKER_LIST."""
         itens = [
             TrackerListItem(tracker_id=self.tracker_id, ip=self.ip, porta=self.porta)
         ]
@@ -362,7 +360,7 @@ class SyncServer:
         return itens
 
     def _anunciar_novo_tracker(self, rejoin: TrackerRejoin) -> None:
-        """Propaga ``TRACKER_ANNOUNCE`` aos demais (menos ao que acabou de voltar)."""
+        """Propaga TRACKER_ANNOUNCE aos demais (menos ao que acabou de voltar)."""
         if self.sync_client is None:
             return
         anuncio = TrackerAnnounce(

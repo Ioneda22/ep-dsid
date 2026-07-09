@@ -1,12 +1,9 @@
-"""Definições das mensagens do protocolo PeerSpot (Listing 7.2 do main.tex).
+"""Definições das mensagens do protocolo PeerSpot.
 
 Todas as mensagens trocadas entre peers, entre tracker e peer, e entre
-trackers são modelos **pydantic** (``BaseModel``): servem de validação de
+trackers são modelos pydantic (BaseModel): servem de validação de
 schema em runtime (inclusive como corpos de requisição do FastAPI) e de
-type hints estáticos. Na rede, trafegam como JSON (``model_dump()``).
-
-Mantenha estas definições alinhadas literalmente com o Listing 7.2 do
-``main.tex``. Qualquer divergência deve ser questionada antes de codar.
+type hints estáticos. Na rede, trafegam como JSON (model_dump()).
 """
 
 from __future__ import annotations
@@ -63,9 +60,9 @@ class SeedReport(BaseModel):
 class RegisterFile(BaseModel):
     """Registro de música (peer -> tracker).
 
-    Os campos ``nome``, ``tamanho`` e ``n_chunks`` são opcionais ao
+    Os campos nome, tamanho e n_chunks são opcionais ao
     re-registrar após download — o tracker já os conhece do upload
-    original (main.tex §7.2).
+    original.
     """
 
     type: Literal["REGISTER_FILE"] = "REGISTER_FILE"
@@ -82,7 +79,7 @@ class SearchFile(BaseModel):
     type: Literal["SEARCH_FILE"] = "SEARCH_FILE"
     query_id: str
     query: str
-    ttl: int  # valor inicial recomendado: 3 — main.tex §7.2
+    ttl: int  # valor inicial recomendado: 3
 
 
 class SearchForward(BaseModel):
@@ -106,11 +103,11 @@ class SearchResultPeer(BaseModel):
 class SearchResultEntry(BaseModel):
     """Entrada de resultado de busca (um hash + seus peers).
 
-    ``n_chunks`` é uma extensão consciente do Listing 7.2 (autorizada):
-    o peer precisa do total de chunks para montar o plano de download e
-    o tracker já o conhece do ``REGISTER_FILE`` original — sem ele, o
-    peer teria de inferi-lo dos ``CHUNK_LIST`` das fontes, o que falha
-    quando nenhuma fonte tem o arquivo completo.
+    n_chunks é uma extensão consciente do protocolo: o peer precisa
+    do total de chunks para montar o plano de download e o tracker já o
+    conhece do REGISTER_FILE original — sem ele, o peer teria de
+    inferi-lo dos CHUNK_LIST das fontes, o que falha quando nenhuma
+    fonte tem o arquivo completo.
     """
 
     hash: str
@@ -185,11 +182,11 @@ class PeerLeaveFile(BaseModel):
 class SyncTableEntry(BaseModel):
     """Entrada individual dentro de uma SYNC_TABLE.
 
-    ``nome``/``tamanho``/``n_chunks`` são uma extensão consciente do
-    Listing 7.2 (autorizada, refletida no main.tex): sem eles, um tracker
-    que conhece o hash apenas via SYNC_TABLE não consegue responder buscas
-    por nome nem aceitar o re-registro pós-download de um peer local.
-    Opcionais: tombstones (``ativo=False``) não precisam deles.
+    nome/tamanho/n_chunks são uma extensão consciente do
+    protocolo: sem eles, um tracker que conhece o hash apenas via
+    SYNC_TABLE não consegue responder buscas por nome nem aceitar o
+    re-registro pós-download de um peer local. Opcionais: tombstones
+    (ativo=False) não precisam deles.
     """
 
     hash: str
@@ -205,30 +202,30 @@ class SyncTableEntry(BaseModel):
 class SyncTable(BaseModel):
     """Atualização incremental do índice (tracker -> tracker).
 
-    O par ``(origem, seq)`` identifica a escrita: ``origem`` é o tracker que
-    a produziu e ``seq`` é o seu contador monotônico. O receptor guarda esse
-    par junto de cada entrada e mantém o maior ``seq`` visto por origem (um
+    O par (origem, seq) identifica a escrita: origem é o tracker que
+    a produziu e seq é o seu contador monotônico. O receptor guarda esse
+    par junto de cada entrada e mantém o maior seq visto por origem (um
     vetor de versões), usado para detectar deltas perdidos e pedi-los de
-    volta via ``SYNC_PULL`` (main.tex §7.2). O ``seq`` só DETECTA perda; o
-    desempate de conflito continua sendo LWW por timestamp.
+    volta via SYNC_PULL. O seq só DETECTA perda; o desempate de
+    conflito continua sendo LWW por timestamp.
     """
 
     type: Literal["SYNC_TABLE"] = "SYNC_TABLE"
     origem: str
-    seq: int  # contador monotônico do tracker de origem — main.tex §7.2
+    seq: int  # contador monotônico do tracker de origem
     timestamp: float
     entries: list[SyncTableEntry]
 
 
 class SyncDigest(BaseModel):
-    """Digest de versões (tracker -> tracker, periódico) — main.tex §7.2.
+    """Digest de versões (tracker -> tracker, periódico).
 
     Em vez de reenviar o estado completo, cada tracker anuncia só o seu vetor
-    de versões: o maior ``seq`` que conhece de cada origem (inclusive o
+    de versões: o maior seq que conhece de cada origem (inclusive o
     próprio). O receptor compara componente a componente e, onde o emissor
-    estiver à frente, pede os deltas faltantes via ``SYNC_PULL``. Cobre o
+    estiver à frente, pede os deltas faltantes via SYNC_PULL. Cobre o
     ponto cego da detecção inline: quando a última escrita de um tracker se
-    perde e ele fica em silêncio, não há ``seq`` posterior para revelar a
+    perde e ele fica em silêncio, não há seq posterior para revelar a
     lacuna.
     """
 
@@ -238,22 +235,22 @@ class SyncDigest(BaseModel):
 
 
 class SyncPullItem(BaseModel):
-    """Um pedido de deltas de uma origem, a partir de ``desde_seq``."""
+    """Um pedido de deltas de uma origem, a partir de desde_seq."""
 
     origem: str
     desde_seq: int
 
 
 class SyncPull(BaseModel):
-    """Pedido de deltas faltantes (tracker -> tracker) — main.tex §7.2.
+    """Pedido de deltas faltantes (tracker -> tracker).
 
-    Disparado pela detecção inline (lacuna de ``seq`` num ``SYNC_TABLE``),
+    Disparado pela detecção inline (lacuna de seq num SYNC_TABLE),
     pela comparação de digests, ou pela reintegração. Pede, para cada origem,
-    tudo o que o destinatário originou com ``seq`` acima de ``desde_seq``.
-    ``desde_seq=0`` pede o estado inteiro daquela origem — é assim que um
+    tudo o que o destinatário originou com seq acima de desde_seq.
+    desde_seq=0 pede o estado inteiro daquela origem — é assim que um
     tracker reintegrado reconstrói o índice. A resposta vem como uma ou mais
-    mensagens ``SYNC_TABLE`` (um evento por ``seq``), na mesma conexão TCP do
-    pedido e incluindo tombstones (``ativo=False``).
+    mensagens SYNC_TABLE (um evento por seq), na mesma conexão TCP do
+    pedido e incluindo tombstones (ativo=False).
     """
 
     type: Literal["SYNC_PULL"] = "SYNC_PULL"
@@ -268,9 +265,9 @@ class SyncPull(BaseModel):
 class TrackerRejoin(BaseModel):
     """Novo tracker se apresentando ao bootstrap node (tracker -> tracker).
 
-    O bootstrap responde com ``TRACKER_LIST``. O índice em si o tracker que
-    volta reconstrói sozinho, com ``SYNC_PULL(desde_seq=0)`` de cada origem
-    conhecida (main.tex §7.2 e §12.3).
+    O bootstrap responde com TRACKER_LIST. O índice em si o tracker que
+    volta reconstrói sozinho, com SYNC_PULL(desde_seq=0) de cada origem
+    conhecida.
     """
 
     type: Literal["TRACKER_REJOIN"] = "TRACKER_REJOIN"
@@ -280,7 +277,7 @@ class TrackerRejoin(BaseModel):
 
 
 class TrackerListItem(BaseModel):
-    """Tracker ativo dentro de ``trackers_conhecidos`` de um ``TRACKER_LIST``."""
+    """Tracker ativo dentro de trackers_conhecidos de um TRACKER_LIST."""
 
     tracker_id: str
     ip: str
@@ -288,10 +285,10 @@ class TrackerListItem(BaseModel):
 
 
 class TrackerList(BaseModel):
-    """Resposta do bootstrap ao ``TRACKER_REJOIN`` (tracker -> tracker).
+    """Resposta do bootstrap ao TRACKER_REJOIN (tracker -> tracker).
 
     Devolve apenas a lista atual de trackers ativos; não carrega o índice,
-    que é reconstruído à parte via ``SYNC_PULL(desde_seq=0)`` (main.tex §7.2).
+    que é reconstruído à parte via SYNC_PULL(desde_seq=0).
     """
 
     type: Literal["TRACKER_LIST"] = "TRACKER_LIST"
@@ -341,7 +338,7 @@ class ErrorMessage(BaseModel):
 # Registro de tipos válidos e validação em runtime
 # ---------------------------------------------------------------------------
 
-#: Mapa de ``type`` -> modelo pydantic correspondente (os 21 do Listing 7.2).
+#: Mapa de type -> modelo pydantic correspondente (os 21 tipos do protocolo).
 MESSAGE_MODELS: dict[str, type[BaseModel]] = {
     "PEER_HELLO": PeerHello,
     "PEER_LEAVE": PeerLeave,
@@ -373,8 +370,8 @@ def _campos_obrigatorios(modelo: type[BaseModel]) -> tuple[str, ...]:
     )
 
 
-#: Mapa de ``type`` -> campos obrigatórios, derivado dos modelos pydantic.
-#: (``type`` tem default e por isso não aparece; idem aos opcionais de
+#: Mapa de type -> campos obrigatórios, derivado dos modelos pydantic.
+#: (type tem default e por isso não aparece; idem aos opcionais de
 #: re-registro do REGISTER_FILE.)
 REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
     tipo: _campos_obrigatorios(modelo) for tipo, modelo in MESSAGE_MODELS.items()
@@ -382,16 +379,16 @@ REQUIRED_FIELDS: dict[str, tuple[str, ...]] = {
 
 
 def validate_message(msg: dict[str, Any]) -> str:
-    """Valida ``msg`` contra o modelo pydantic do seu ``type``.
+    """Valida msg contra o modelo pydantic do seu type.
 
     Args:
         msg: Dicionário recém-decodificado do JSON.
 
     Returns:
-        O ``type`` da mensagem.
+        O type da mensagem.
 
     Raises:
-        ValueError: Se ``type`` estiver ausente ou for desconhecido, se
+        ValueError: Se type estiver ausente ou for desconhecido, se
             faltar campo obrigatório, ou se algum campo tiver tipo inválido.
     """
     if not isinstance(msg, dict):

@@ -16,14 +16,17 @@ SHA256_ABC = "ba7816bf8f01cfea414140de5dae2223b00361a396177a9cb410ff61f20015ad"
 
 
 def test_sha256_bytes_vazio() -> None:
+    """SHA-256 de uma sequência de bytes vazia deve bater com o vetor conhecido."""
     assert sha256_bytes(b"") == SHA256_VAZIO
 
 
 def test_sha256_bytes_abc() -> None:
+    """SHA-256 de b"abc" deve bater com o vetor conhecido."""
     assert sha256_bytes(b"abc") == SHA256_ABC
 
 
 def test_sha256_file_eq_sha256_bytes(tmp_path: Path) -> None:
+    """Hashar um arquivo em disco deve dar o mesmo resultado que hashar o conteúdo em memória."""
     data = b"PeerSpot test payload " * 1000  # ~22 KB
     f = tmp_path / "amostra.bin"
     f.write_bytes(data)
@@ -39,5 +42,6 @@ def test_sha256_file_grande_streaming(tmp_path: Path) -> None:
 
 
 def test_sha256_file_inexistente(tmp_path: Path) -> None:
+    """Hashar um caminho que não existe deve levantar FileNotFoundError."""
     with pytest.raises(FileNotFoundError):
         sha256_file(tmp_path / "nao-existe.bin")

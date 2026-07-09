@@ -1,10 +1,10 @@
-"""Servidor TCP do peer: fornece chunks a outros peers (§7.1).
+"""Servidor TCP do peer: fornece chunks a outros peers.
 
-Atende ``CHUNK_LIST_REQUEST`` → ``CHUNK_LIST`` e ``CHUNK_REQUEST`` →
-``CHUNK_DATA_HEADER`` + payload binário, com uma thread filha por
+Atende CHUNK_LIST_REQUEST → CHUNK_LIST e CHUNK_REQUEST →
+CHUNK_DATA_HEADER + payload binário, com uma thread filha por
 conexão aceita. As conexões peer↔peer são persistentes: o mesmo socket
 serve múltiplas requisições em sequência, por isso cada conexão tem um
-único :class:`MessageReader` e o loop só termina quando o cliente fecha.
+único MessageReader e o loop só termina quando o cliente fecha.
 """
 
 from __future__ import annotations
@@ -39,15 +39,15 @@ logger = logging.getLogger(__name__)
 
 
 class PeerTCPServer:
-    """Servidor TCP que serve chunks do :class:`Storage` deste peer."""
+    """Servidor TCP que serve chunks do Storage deste peer."""
 
     def __init__(self, ip: str, porta: int, storage: Storage) -> None:
-        """Configura o servidor (não escuta até :meth:`start`).
+        """Configura o servidor (não escuta até start).
 
         Args:
-            ip: IP local a escutar (ex.: ``127.0.0.1``).
-            porta: Porta a escutar; ``0`` escolhe porta livre (testes) —
-                o valor real fica em ``self.porta`` após ``started``.
+            ip: IP local a escutar (ex.: 127.0.0.1).
+            porta: Porta a escutar; 0 escolhe porta livre (testes) —
+                o valor real fica em self.porta após started.
             storage: Armazenamento local de onde os chunks são lidos.
         """
         self.ip = ip

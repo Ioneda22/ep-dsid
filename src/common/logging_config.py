@@ -1,7 +1,7 @@
 """Configuração centralizada de logging para tracker e peer.
 
-Formato: ``timestamp - nome_modulo - level - mensagem``. Handler para arquivo
-e para ``stderr``. Idempotente — chamar duas vezes não duplica handlers no
+Formato: timestamp - nome_modulo - level - mensagem. Handler para arquivo
+e para stderr. Idempotente — chamar duas vezes não duplica handlers no
 logger raiz.
 """
 
@@ -16,22 +16,22 @@ _DATE_FORMAT = "%Y-%m-%d %H:%M:%S"
 
 
 def setup_logging(log_path: Path, level: str = "INFO") -> logging.Logger:
-    """Configura o logger raiz com handlers para arquivo e ``stderr``.
+    """Configura o logger raiz com handlers para arquivo e stderr.
 
-    Cria o diretório pai de ``log_path`` se necessário. Se já houver handlers
+    Cria o diretório pai de log_path se necessário. Se já houver handlers
     do PeerSpot anexados ao logger raiz (marcados via atributo
-    ``_peerspot_handler``), eles são removidos antes — assim chamar
-    ``setup_logging`` duas vezes não duplica saídas.
+    _peerspot_handler), eles são removidos antes — assim chamar
+    setup_logging duas vezes não duplica saídas.
 
     Args:
         log_path: Caminho do arquivo de log. Diretórios pais são criados.
-        level: Nível textual (``"DEBUG"``, ``"INFO"``, ``"WARNING"``, ...).
+        level: Nível textual ("DEBUG", "INFO", "WARNING", ...).
 
     Returns:
         O logger raiz já configurado.
 
     Raises:
-        ValueError: Se ``level`` não for um nível conhecido.
+        ValueError: Se level não for um nível conhecido.
     """
     mapping = logging.getLevelNamesMapping()
     nivel_upper = level.upper()

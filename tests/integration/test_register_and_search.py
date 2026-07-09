@@ -1,7 +1,7 @@
-"""Teste de integração da Fase 2: tracker REST real + cliente HTTP.
+"""Teste de integração do tracker: app REST real + cliente HTTP.
 
 Sobe o app FastAPI num uvicorn real (thread, porta dinâmica em
-127.0.0.1 — §10) e exercita o ciclo PEER_HELLO → REGISTER_FILE →
+127.0.0.1) e exercita o ciclo PEER_HELLO → REGISTER_FILE →
 SEARCH_FILE → PEER_LEAVE_FILE → PEER_LEAVE via httpx.
 """
 
@@ -207,7 +207,7 @@ def test_seed_report_reconstroi_presenca_e_remove_omitidos(
     _peer_hello(cliente, "alice", 7001)
     _register_file(cliente, "alice")
 
-    # Relatório sem o hash: equivale a remoção (main.tex §7.2).
+    # Relatório sem o hash: equivale a remoção (o hash omitido vira tombstone).
     resposta = cliente.post(
         "/peers/seed-report",
         json={

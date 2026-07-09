@@ -1,14 +1,14 @@
 """Armazenamento local do peer: chunks em download e arquivos montados.
 
-Layout em disco (``storage_dir`` = ``data/<peer>`` do YAML, §7.3):
+Layout em disco (storage_dir = data/<peer> do YAML):
 
     <hash>/chunks/chunk_<i>.bin   # chunks recebidos durante um download
     <hash>/arquivo                # arquivo completo montado
 
 Para não duplicar espaço em disco, ao concluir um download os chunks
 individuais são apagados e o arquivo montado vira a única cópia. Ao
-servir outros peers, :meth:`Storage.load_chunk` extrai a fatia
-correspondente do arquivo montado on-the-fly (``seek``/``read``) —
+servir outros peers, Storage.load_chunk extrai a fatia
+correspondente do arquivo montado on-the-fly (seek/read) —
 "repartir na hora de fornecer" em vez de manter as duas formas.
 """
 
@@ -25,18 +25,19 @@ from src.common.hashing import sha256_file
 class Storage:
     """Gerencia chunks e arquivos completos no disco local do peer.
 
-    Não é thread-safe por si só; na Fase 3 o download é sequencial e o
-    TCP server apenas lê arquivos já completos, o que não conflita.
+    Não é thread-safe por si só; cada chunk é gravado em um arquivo
+    próprio (índices distintos não colidem) e o TCP server apenas lê
+    arquivos já completos, o que não conflita.
     """
 
     def __init__(
         self, storage_dir: str | Path, chunk_size: int = DEFAULT_CHUNK_SIZE
     ) -> None:
-        """Cria o storage ancorado em ``storage_dir`` (criado se ausente).
+        """Cria o storage ancorado em storage_dir (criado se ausente).
 
         Args:
-            storage_dir: Diretório raiz (``storage_dir`` do YAML).
-            chunk_size: Tamanho do chunk em bytes (§7.3: 256 KiB).
+            storage_dir: Diretório raiz (storage_dir do YAML).
+            chunk_size: Tamanho do chunk em bytes (256 KiB).
         """
         self.storage_dir = Path(storage_dir)
         self.chunk_size = chunk_size
@@ -47,7 +48,7 @@ class Storage:
     # ------------------------------------------------------------------
 
     def assembled_path(self, hash_arquivo: str) -> Path:
-        """Caminho do arquivo completo montado para ``hash_arquivo``."""
+        """Caminho do arquivo completo montado para hash_arquivo."""
         return self.storage_dir / hash_arquivo / "arquivo"
 
     def _chunks_dir(self, hash_arquivo: str) -> Path:
@@ -102,13 +103,13 @@ class Storage:
         return caminho.read_bytes()
 
     def has_chunk(self, hash_arquivo: str, index: int) -> bool:
-        """Indica se este peer pode fornecer o chunk ``index``."""
+        """Indica se este peer pode fornecer o chunk index."""
         if self.assembled_path(hash_arquivo).exists():
             return 0 <= index < self.get_chunk_count(hash_arquivo)
         return self._chunk_path(hash_arquivo, index).exists()
 
     def get_chunk_count(self, hash_arquivo: str) -> int:
-        """Número de chunks conhecidos para ``hash_arquivo``.
+        """Número de chunks conhecidos para hash_arquivo.
 
         Arquivo montado: derivado do tamanho. Em download: maior índice
         presente + 1 (suficiente para responder CHUNK_LIST). Ausente: 0.
@@ -140,16 +141,16 @@ class Storage:
         )
 
     def import_file(self, origem: Path) -> tuple[str, int, int]:
-        """Importa um arquivo externo para o storage (comando ``upload``).
+        """Importa um arquivo externo para o storage (comando upload).
 
         Args:
             origem: Caminho do arquivo no disco do usuário.
 
         Returns:
-            Tupla ``(hash, tamanho_bytes, n_chunks)``.
+            Tupla (hash, tamanho_bytes, n_chunks).
 
         Raises:
-            FileNotFoundError: Se ``origem`` não existir.
+            FileNotFoundError: Se origem não existir.
         """
         hash_arquivo = sha256_file(origem)
         tamanho = origem.stat().st_size
@@ -161,7 +162,7 @@ class Storage:
     def assemble_file(self, hash_arquivo: str, n_chunks: int) -> Path:
         """Concatena os chunks, valida o SHA-256 e apaga os chunks soltos.
 
-        Monta primeiro em ``arquivo.tmp`` para que ``load_chunk`` nunca
+        Monta primeiro em arquivo.tmp para que load_chunk nunca
         enxergue um arquivo montado parcial; o rename só ocorre após a
         validação do hash.
 

@@ -1,14 +1,14 @@
-"""Detecção de falha de peer por ausência de ``SEED_REPORT`` (§6.3 do CLAUDE.md).
+"""Detecção de falha de peer por ausência de SEED_REPORT.
 
-Uma thread dedicada varre ``Index.nome_peer_to_endereco`` a cada
-``interval_seconds`` (default 60s) e, para cada peer sem ``SEED_REPORT`` há mais
-de ``seed_report_timeout_seconds`` (default 360s = 2 rodadas de 3 min), marca
-todas as suas fontes como tombstone e propaga via ``SYNC_TABLE`` (main.tex §13.4).
+Uma thread dedicada varre Index.nome_peer_to_endereco a cada
+interval_seconds (default 60s) e, para cada peer sem SEED_REPORT há mais
+de seed_report_timeout_seconds (default 360s = 2 rodadas de 3 min), marca
+todas as suas fontes como tombstone e propaga via SYNC_TABLE.
 
-Espelha o padrão do ``TombstoneReaper``: a classe só dá o ritmo; toda a lógica
-de estado (comparação com ``last_seed_ts``, tombstones, alocação de ``seq``) vive
-em :meth:`src.tracker.index.Index.detectar_peers_falhos`, sob o relógio injetado
-do índice — o que mantém a detecção testável sem dormir (§10).
+Espelha o padrão do TombstoneReaper: a classe só dá o ritmo; toda a lógica
+de estado (comparação com last_seed_ts, tombstones, alocação de seq) vive
+em src.tracker.index.Index.detectar_peers_falhos, sob o relógio injetado
+do índice — o que mantém a detecção testável sem dormir.
 """
 
 from __future__ import annotations
@@ -43,10 +43,10 @@ class FailureDetector:
         """Args:
         tracker_id: Identificador deste tracker (para logs).
         index: Índice varrido em busca de peers silenciosos.
-        sync_client: Cliente de flooding para propagar os tombstones; ``None``
+        sync_client: Cliente de flooding para propagar os tombstones; None
             desliga a propagação (tracker isolado/testes).
         seed_report_timeout_seconds: Silêncio máximo tolerado antes do
-            tombstone (main.tex §13.4: 6 min = 2 rodadas perdidas).
+            tombstone (6 min = 2 rodadas perdidas).
         interval_seconds: Período da varredura.
         """
         self.tracker_id = tracker_id
@@ -73,7 +73,7 @@ class FailureDetector:
             self._thread.join(timeout=5)
 
     def detectar_agora(self) -> list[str]:
-        """Executa uma varredura imediata (inicialização e testes §10).
+        """Executa uma varredura imediata (inicialização e testes).
 
         Returns:
             Nomes dos peers considerados falhos nesta varredura.

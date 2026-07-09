@@ -1,9 +1,8 @@
 """Códigos de erro e exceções customizadas do PeerSpot.
 
-Os códigos abaixo são usados no campo ``code`` da mensagem ``ERROR``
-(Listing 7.2 do ``main.tex``). Mantenha-os como constantes para evitar
-typos. As exceções correspondentes têm o atributo ``code`` apontando para
-a constante.
+Os códigos abaixo são usados no campo code da mensagem ERROR.
+Mantenha-os como constantes para evitar typos. As exceções
+correspondentes têm o atributo code apontando para a constante.
 """
 
 from __future__ import annotations
@@ -11,7 +10,7 @@ from __future__ import annotations
 from typing import Any
 
 # ---------------------------------------------------------------------------
-# Códigos de erro (campo ``code`` da mensagem ERROR)
+# Códigos de erro (campo code da mensagem ERROR)
 # ---------------------------------------------------------------------------
 
 NOT_FOUND = "NOT_FOUND"
@@ -108,19 +107,19 @@ class MalformedMessageError(PeerSpotError):
 def build_error_message(
     ref_type: str, ref_id: str, code: str, mensagem: str
 ) -> dict[str, Any]:
-    """Constrói um dicionário ``ERROR`` pronto para serialização.
+    """Constrói um dicionário ERROR pronto para serialização.
 
     Args:
-        ref_type: Tipo da mensagem que falhou (ex: ``"CHUNK_REQUEST"``).
-        ref_id: ``query_id`` ou outro correlator; ``""`` se não aplicável.
+        ref_type: Tipo da mensagem que falhou (ex: "CHUNK_REQUEST").
+        ref_id: query_id ou outro correlator; "" se não aplicável.
         code: Um dos códigos definidos neste módulo.
         mensagem: Descrição legível para depuração.
 
     Returns:
-        Dicionário com a estrutura de ``ERROR`` (Listing 7.2).
+        Dicionário com a estrutura de ERROR.
 
     Raises:
-        ValueError: Se ``code`` não for um código válido.
+        ValueError: Se code não for um código válido.
     """
     if code not in ERROR_CODES:
         raise ValueError(

@@ -1,7 +1,7 @@
-"""Teste de integração da Fase 3: tracker + 2 peers, download sequencial.
+"""Teste de integração de download sequencial: tracker + 2 peers.
 
 Sobe um tracker uvicorn real e os componentes de dois peers (alice e
-bob) em portas dinâmicas de 127.0.0.1 (§10). Alice importa um arquivo
+bob) em portas dinâmicas de 127.0.0.1. Alice importa um arquivo
 de ~2 MB (8 chunks) e o registra; bob busca, baixa chunk a chunk da
 alice via TCP, valida o SHA-256 e re-registra como segunda fonte.
 """
@@ -31,7 +31,7 @@ from src.tracker.api import create_app
 from src.tracker.index import Index
 from src.tracker.persistence import init_db
 
-#: 2 MiB = exatamente 8 chunks de 256 KiB (§7.3).
+#: 2 MiB = exatamente 8 chunks de 256 KiB.
 TAMANHO_ARQUIVO = 2 * 1024 * 1024
 N_CHUNKS_ESPERADO = 8
 
@@ -74,7 +74,7 @@ def tracker_porta(tmp_path: Path) -> Iterator[int]:
 
 @pytest.fixture()
 def trackers_cfg(tracker_porta: int) -> list[dict]:
-    """Lista ``trackers`` do YAML apontando para o tracker de teste."""
+    """Lista trackers do YAML apontando para o tracker de teste."""
     return [
         {"tracker_id": "tracker-teste", "ip": "127.0.0.1", "api_port": tracker_porta}
     ]
@@ -89,7 +89,7 @@ def _subir_peer_servidor(storage: Storage) -> PeerTCPServer:
 
 
 def test_upload_alice_download_bob(tmp_path: Path, trackers_cfg: list[dict]) -> None:
-    """Fluxo completo: upload em alice → search/download em bob (§9 Fase 3)."""
+    """Fluxo completo: upload em alice → search/download em bob."""
     conteudo = os.urandom(TAMANHO_ARQUIVO)
     original = tmp_path / "musica.bin"
     original.write_bytes(conteudo)
@@ -137,7 +137,7 @@ def test_upload_alice_download_bob(tmp_path: Path, trackers_cfg: list[dict]) -> 
             )
             caminho = downloader.download_file(hash_arquivo, "musica")
 
-            # SHA-256 do arquivo final em bob == original (§9 Fase 3).
+            # SHA-256 do arquivo final em bob == original.
             assert caminho is not None
             assert sha256_file(caminho) == hash_arquivo
             assert caminho.read_bytes() == conteudo

@@ -1,8 +1,8 @@
-"""Helpers para subir um cluster de trackers reais em threads (§10).
+"""Helpers para subir um cluster de trackers reais em threads.
 
-Cada nó do cluster tem seu próprio ``Index``, servidor de sincronização TCP
-(``SyncServer``) e API REST (uvicorn), tudo em ``127.0.0.1`` com portas
-dinâmicas. ``com_flooding=False`` desliga o ``SyncClient`` (nenhuma
+Cada nó do cluster tem seu próprio Index, servidor de sincronização TCP
+(SyncServer) e API REST (uvicorn), tudo em 127.0.0.1 com portas
+dinâmicas. com_flooding=False desliga o SyncClient (nenhuma
 propagação de SYNC_TABLE), útil para exercitar o SEARCH_FORWARD isolado.
 """
 
@@ -15,6 +15,7 @@ from collections.abc import Callable, Iterator
 from contextlib import contextmanager
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any
 
 import uvicorn
 
@@ -37,7 +38,7 @@ def porta_livre() -> int:
 def aguardar(
     condicao: Callable[[], bool], timeout: float = 3.0, intervalo: float = 0.05
 ) -> bool:
-    """Espera ``condicao()`` virar True dentro de ``timeout`` segundos."""
+    """Espera condicao() virar True dentro de timeout segundos."""
     prazo = time.monotonic() + timeout
     while time.monotonic() < prazo:
         if condicao():
@@ -71,7 +72,7 @@ class TrackerNode:
 
 
 def _subir_api(
-    node_app: object, api_port: int
+    node_app: Any, api_port: int
 ) -> tuple[uvicorn.Server, threading.Thread]:
     config = uvicorn.Config(
         node_app, host="127.0.0.1", port=api_port, log_config=None, log_level="warning"
@@ -90,12 +91,12 @@ def cluster_de_trackers(
     search_timeout: float = 2.0,
     clock: Callable[[], float] = time.time,
 ) -> Iterator[dict[str, TrackerNode]]:
-    """Sobe ``len(ids)`` trackers conectados entre si e derruba ao sair.
+    """Sobe len(ids) trackers conectados entre si e derruba ao sair.
 
     Os sync servers sobem primeiro (porta 0 → dinâmica); só então cada nó
-    monta sua lista de ``KnownTracker`` com as portas efetivas dos demais.
+    monta sua lista de KnownTracker com as portas efetivas dos demais.
 
-    ``clock`` é injetado em TODOS os índices (§10): passe um relógio mutável para
+    clock é injetado em TODOS os índices: passe um relógio mutável para
     exercitar de forma determinística o que depende de tempo (expiração,
     failure detection) sem dormir.
     """

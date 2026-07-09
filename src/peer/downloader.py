@@ -1,22 +1,22 @@
-"""Orquestrador de download PARALELO entre múltiplas fontes (§7.4 do CLAUDE.md).
+"""Orquestrador de download PARALELO entre múltiplas fontes.
 
-Fluxo (substitui o sequencial da Fase 3):
+Fluxo:
 
-1. ``SEARCH_FILE`` no tracker (busca por nome — o tracker resolve
-   nome → hash → peers). O ``SEARCH_RESULT`` traz o ``n_chunks`` de cada hash.
-2. ``CHUNK_LIST_REQUEST`` a cada fonte EM PARALELO → mapa
-   ``chunk_index → [fontes que têm]``.
+1. SEARCH_FILE no tracker (busca por nome — o tracker resolve
+   nome → hash → peers). O SEARCH_RESULT traz o n_chunks de cada hash.
+2. CHUNK_LIST_REQUEST a cada fonte EM PARALELO → mapa
+   chunk_index → [fontes que têm].
 3. Plano de download: para cada chunk faltante, escolhe como fonte primária a
    que tem MENOS chunks já atribuídos (balanceamento rarest-first simplificado),
    guardando as demais como fallback.
-4. ``ThreadPoolExecutor`` com ``download_pool_size`` workers baixa os chunks;
+4. ThreadPoolExecutor com download_pool_size workers baixa os chunks;
    cada worker tenta a primária e, em falha, as outras fontes que têm o chunk.
-5. Timeout por ``CHUNK_REQUEST`` = ``chunk_request_timeout_seconds`` (no cliente).
+5. Timeout por CHUNK_REQUEST = chunk_request_timeout_seconds (no cliente).
 6. Chunk sem nenhuma fonte que sirva → o download falha (sem retransmissão).
-7. Ao completar: ``assemble_file`` valida o SHA-256 e re-registra via
-   ``REGISTER_FILE``.
+7. Ao completar: assemble_file valida o SHA-256 e re-registra via
+   REGISTER_FILE.
 
-Retomada: chunks já no disco (``storage.has_chunk``) são reconciliados a partir
+Retomada: chunks já no disco (storage.has_chunk) são reconciliados a partir
 do disco antes do pool — o download baixa só o que falta, mesmo após reinício.
 """
 
@@ -40,11 +40,11 @@ if TYPE_CHECKING:
 
 logger = logging.getLogger(__name__)
 
-#: Endereço de uma fonte: ``(ip, porta)``.
+#: Endereço de uma fonte: (ip, porta).
 Fonte = tuple[str, int]
 #: Mapa fonte → chunks anunciados.
 ChunksPorFonte = dict[Fonte, list[int]]
-#: Plano de download: ``chunk_index -> fontes ordenadas (primária primeiro)``.
+#: Plano de download: chunk_index -> fontes ordenadas (primária primeiro).
 PlanoDownload = dict[int, list[Fonte]]
 
 
@@ -60,7 +60,7 @@ class Downloader:
         chunk_manager: ChunkManager,
         download_pool_size: int = 8,
     ) -> None:
-        """Recebe todas as dependências por parâmetro (§14.4).
+        """Recebe todas as dependências por parâmetro.
 
         Args:
             nome_peer: Nome deste peer (excluído das fontes; re-registro).
@@ -68,7 +68,7 @@ class Downloader:
             tcp_client: Cliente TCP peer↔peer (thread-safe).
             storage: Armazenamento local de chunks/arquivos.
             chunk_manager: Rastreador de progresso.
-            download_pool_size: Nº de workers do pool de download (§7.6: 8).
+            download_pool_size: Nº de workers do pool de download (padrão 8).
         """
         self.nome_peer = nome_peer
         self.tracker_client = tracker_client
@@ -78,15 +78,15 @@ class Downloader:
         self.download_pool_size = download_pool_size
 
     def download_file(self, hash_arquivo: str, nome_musica: str) -> Path | None:
-        """Baixa ``hash_arquivo`` e devolve o caminho do arquivo montado.
+        """Baixa hash_arquivo e devolve o caminho do arquivo montado.
 
         Args:
             hash_arquivo: Hash SHA-256 escolhido pelo usuário.
             nome_musica: Nome legível associado (da busca anterior), usado para
-                refazer o ``SEARCH_FILE`` e obter fontes frescas.
+                refazer o SEARCH_FILE e obter fontes frescas.
 
         Returns:
-            Caminho do arquivo completo, ou ``None`` em falha (já logada).
+            Caminho do arquivo completo, ou None em falha (já logada).
         """
         montado = self.storage.assembled_path(hash_arquivo)
         if montado.exists():
@@ -197,7 +197,7 @@ class Downloader:
         primária de cada chunk é a de menor carga atual; as demais viram fallback.
 
         Returns:
-            O plano, ou ``None`` se algum chunk não tem nenhuma fonte que o sirva.
+            O plano, ou None se algum chunk não tem nenhuma fonte que o sirva.
         """
         fontes_do_chunk = {
             chunk: [f for f, indices in chunks_por_fonte.items() if chunk in indices]
@@ -218,7 +218,7 @@ class Downloader:
         return plano
 
     def _baixar_paralelo(self, hash_arquivo: str, plano: PlanoDownload) -> bool:
-        """Baixa os chunks do plano com um pool de ``download_pool_size`` workers."""
+        """Baixa os chunks do plano com um pool de download_pool_size workers."""
         with ThreadPoolExecutor(max_workers=self.download_pool_size) as executor:
             futuros = {
                 executor.submit(self._baixar_chunk, hash_arquivo, chunk, fontes): chunk
@@ -238,7 +238,7 @@ class Downloader:
     def _baixar_chunk(
         self, hash_arquivo: str, chunk_index: int, fontes: list[Fonte]
     ) -> bool:
-        """Baixa um chunk tentando cada fonte em ordem até uma servir (§7.4)."""
+        """Baixa um chunk tentando cada fonte em ordem até uma servir."""
         for ip, porta in fontes:
             dados = self.tcp_client.download_chunk(ip, porta, hash_arquivo, chunk_index)
             if dados is None:
@@ -260,7 +260,7 @@ class Downloader:
         try:
             caminho = self.storage.assemble_file(hash_arquivo, n_chunks)
         except (FileNotFoundError, InvalidHashError):
-            # Conteúdo corrompido: descarta tudo (§7.4 passo 6) — reter chunks que
+            # Conteúdo corrompido: descarta tudo — reter chunks que
             # não batem com o hash não permite retomada.
             logger.exception("validação falhou para %s; descartando", hash_arquivo)
             self.storage.remove_file(hash_arquivo)

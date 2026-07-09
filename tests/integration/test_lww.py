@@ -1,13 +1,13 @@
-"""Testes da resolução Last Write Wins do índice (§6.2; main.tex §12.2).
+"""Testes da resolução Last Write Wins do índice.
 
-Aplica entradas de ``SYNC_TABLE`` concorrentes sobre o mesmo ``Index`` e
+Aplica entradas de SYNC_TABLE concorrentes sobre o mesmo Index e
 verifica as três regras: timestamp maior vence, menor é descartado e o
-empate é resolvido pelo maior ``tracker_id`` — de forma determinística,
+empate é resolvido pelo maior tracker_id — de forma determinística,
 independente da ordem de chegada (senão as réplicas divergiriam).
 
-O ``seq`` viaja junto de cada aplicação (proveniência), mas NÃO entra na
-decisão LWW; aqui usamos um ``seq`` fixo, pois o que se testa é o desempate
-por ``(timestamp, origem)``.
+O seq viaja junto de cada aplicação (proveniência), mas NÃO entra na
+decisão LWW; aqui usamos um seq fixo, pois o que se testa é o desempate
+por (timestamp, origem).
 """
 
 from __future__ import annotations
@@ -21,7 +21,7 @@ HASH = "a" * 64
 
 
 class RelogioFake:
-    """Relógio determinístico injetado no Index (§10)."""
+    """Relógio determinístico injetado no Index para tornar o LWW previsível."""
 
     def __init__(self, inicio: float = 1000.0) -> None:
         self.agora = inicio
@@ -68,7 +68,7 @@ def _aplicar(
     timestamp: float,
     seq: int = 1,
 ) -> bool:
-    """Aplica uma entry de SYNC_TABLE (o ``seq`` é proveniência, não LWW)."""
+    """Aplica uma entry de SYNC_TABLE (o seq é proveniência, não LWW)."""
     return indice.apply_sync_entry(entry, origem, timestamp, seq)
 
 
@@ -124,7 +124,7 @@ def test_empate_vence_maior_tracker_id_independente_da_ordem(
     for origem in ordem:
         _aplicar(indice, versoes[origem], origem, timestamp=500.0)
     fonte = indice.get_snapshot().hash_to_peers[HASH]["alice"]
-    # LWW: empate vence maior tracker_id — main.tex §12.2.
+    # LWW: empate de timestamp vence o maior tracker_id (lexicográfico).
     assert (fonte.ip, fonte.origem) == ("10.0.0.3", "tracker-3")
 
 
@@ -145,7 +145,7 @@ def test_replay_identico_e_descartado(indice: Index) -> None:
 
 
 # ---------------------------------------------------------------------------
-# Interação registro ↔ tombstone (main.tex §12.3)
+# Interação registro ↔ tombstone
 # ---------------------------------------------------------------------------
 
 

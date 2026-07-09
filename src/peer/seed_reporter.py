@@ -1,13 +1,13 @@
-"""Seed reporter do peer — envio periódico de ``SEED_REPORT`` (§7.1/§13.4).
+"""Seed reporter do peer — envio periódico de SEED_REPORT.
 
-Thread daemon que, a cada ``interval_seconds`` (default 180s = 3 min), envia ao
-tracker atual um ``SEED_REPORT`` com todos os hashes completos deste peer
-(``storage.list_local_files()``). O relatório cumpre duplo papel (main.tex §13.4):
+Thread daemon que, a cada interval_seconds (default 180s = 3 min), envia ao
+tracker atual um SEED_REPORT com todos os hashes completos deste peer
+(storage.list_local_files()). O relatório cumpre duplo papel:
 anti-entropy do índice (hash omitido vira tombstone no tracker) e sinal de vida
 (ausência por 2 rodadas marca o peer como falho no failure detector).
 
-O envio vai por ``PeerTrackerClient``, que já resolve o fallback entre trackers
-(§7.5) — o reporter não conhece a lista de trackers, só dispara o relatório.
+O envio vai por PeerTrackerClient, que já resolve o fallback entre trackers
+— o reporter não conhece a lista de trackers, só dispara o relatório.
 """
 
 from __future__ import annotations
@@ -24,7 +24,7 @@ logger = logging.getLogger(__name__)
 
 
 class SeedReporter:
-    """Thread periódica que envia ``SEED_REPORT`` com os hashes locais do peer."""
+    """Thread periódica que envia SEED_REPORT com os hashes locais do peer."""
 
     def __init__(
         self,
@@ -35,7 +35,7 @@ class SeedReporter:
         tracker_client: PeerTrackerClient,
         interval_seconds: int = 180,
     ) -> None:
-        """Recebe as dependências por parâmetro (§14.4).
+        """Recebe as dependências por parâmetro.
 
         Args:
             nome_peer: Nome deste peer (identidade no relatório).
@@ -43,7 +43,7 @@ class SeedReporter:
             porta: Porta do TCP server de chunks deste peer.
             storage: Armazenamento local — fonte dos hashes completos.
             tracker_client: Cliente REST (já com fallback) que envia o relatório.
-            interval_seconds: Intervalo entre relatórios (§7.6: 3 minutos).
+            interval_seconds: Intervalo entre relatórios (3 minutos).
         """
         self.nome_peer = nome_peer
         self.ip = ip
@@ -72,10 +72,10 @@ class SeedReporter:
             self._thread.join(timeout=5)
 
     def enviar_agora(self) -> bool:
-        """Envia um ``SEED_REPORT`` imediato (inicialização e testes §10).
+        """Envia um SEED_REPORT imediato (inicialização e testes).
 
         Returns:
-            ``True`` se o tracker respondeu; ``False`` em qualquer falha (já
+            True se o tracker respondeu; False em qualquer falha (já
             logada) — nunca levanta, para não derrubar a thread periódica.
         """
         hashes = self.storage.list_local_files()

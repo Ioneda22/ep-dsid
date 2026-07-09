@@ -1,19 +1,19 @@
-"""Roteamento de buscas entre trackers — SEARCH_FORWARD com TTL (§6.4).
+"""Roteamento de buscas entre trackers — SEARCH_FORWARD com TTL.
 
-Quando a busca local não tem hit e ``ttl > 0``, o tracker de origem envia
-``SEARCH_FORWARD(ttl-1)`` em paralelo (uma thread por destino) aos trackers
-ainda não consultados para aquele ``query_id`` e agrega os ``SEARCH_RESULT``
-que chegarem dentro de ``search_forward_timeout_seconds`` (default 2s);
+Quando a busca local não tem hit e ttl > 0, o tracker de origem envia
+SEARCH_FORWARD(ttl-1) em paralelo (uma thread por destino) aos trackers
+ainda não consultados para aquele query_id e agrega os SEARCH_RESULT
+que chegarem dentro de search_forward_timeout_seconds (default 2s);
 respostas atrasadas são descartadas.
 
-O ``SEARCH_RESULT`` volta NA MESMA conexão TCP do ``SEARCH_FORWARD``: em
+O SEARCH_RESULT volta NA MESMA conexão TCP do SEARCH_FORWARD: em
 topologia totalmente conectada, a conexão parte do próprio tracker de
 origem, então responder nela é "devolver direto ao origem_tracker"
-(Listing 7.2) sem precisar de um dispatcher de respostas por query_id.
+sem precisar de um dispatcher de respostas por query_id.
 
-O receptor (:func:`handle_search_forward`) só busca localmente e NUNCA
+O receptor (handle_search_forward) só busca localmente e NUNCA
 re-encaminha: o originador já consulta todos os trackers conhecidos de uma
-vez (mesma razão do "não é preciso re-flood" do main.tex §8) e o TTL
+vez (mesma razão do "não é preciso re-flood") e o TTL
 controla a profundidade.
 """
 
@@ -46,11 +46,11 @@ _QUERY_CACHE_MAXSIZE = 1024
 
 
 class QueryForwardCache:
-    """Cache LRU de ``query_id → set[tracker_id_já_consultado]`` (§6.4).
+    """Cache LRU de query_id → set[tracker_id_já_consultado].
 
-    Evita laços: um mesmo ``query_id`` nunca é re-encaminhado ao mesmo
+    Evita laços: um mesmo query_id nunca é re-encaminhado ao mesmo
     tracker, mesmo que o peer repita a busca. LRU limitado a
-    ``maxsize`` entradas; o acesso é protegido por lock próprio.
+    maxsize entradas; o acesso é protegido por lock próprio.
     """
 
     def __init__(self, maxsize: int = _QUERY_CACHE_MAXSIZE) -> None:
@@ -59,7 +59,7 @@ class QueryForwardCache:
         self._consultados: OrderedDict[str, set[str]] = OrderedDict()
 
     def consultados(self, query_id: str) -> set[str]:
-        """Trackers já consultados para ``query_id`` (cópia)."""
+        """Trackers já consultados para query_id (cópia)."""
         with self._lock:
             consultados = self._consultados.get(query_id)
             if consultados is None:
@@ -68,7 +68,7 @@ class QueryForwardCache:
             return set(consultados)
 
     def registrar(self, query_id: str, tracker_ids: set[str]) -> None:
-        """Acrescenta trackers ao conjunto consultado de ``query_id``."""
+        """Acrescenta trackers ao conjunto consultado de query_id."""
         with self._lock:
             self._consultados.setdefault(query_id, set()).update(tracker_ids)
             self._consultados.move_to_end(query_id)
@@ -77,7 +77,7 @@ class QueryForwardCache:
 
 
 def handle_search_forward(msg: SearchForward, index: Index) -> SearchResult:
-    """Atende um ``SEARCH_FORWARD`` recebido: busca local, sem re-encaminhar.
+    """Atende um SEARCH_FORWARD recebido: busca local, sem re-encaminhar.
 
     O TTL controla a profundidade e o originador já consulta todos os
     trackers conhecidos em paralelo — re-encaminhar duplicaria consultas.
@@ -94,7 +94,7 @@ def handle_search_forward(msg: SearchForward, index: Index) -> SearchResult:
 
 
 class SearchRouter:
-    """Origina ``SEARCH_FORWARD`` quando a busca local não tem hit (§6.4)."""
+    """Origina SEARCH_FORWARD quando a busca local não tem hit."""
 
     def __init__(
         self,
@@ -111,10 +111,10 @@ class SearchRouter:
         self.cache = cache if cache is not None else QueryForwardCache()
 
     def handle_search_file_with_forwarding(self, msg: SearchFile) -> SearchResult:
-        """Busca local primeiro; sem hit e com ``ttl > 0``, consulta os demais.
+        """Busca local primeiro; sem hit e com ttl > 0, consulta os demais.
 
-        Respostas que chegarem após ``timeout_seconds`` são descartadas; se
-        nada chegar a tempo, devolve ``resultados=[]`` (main.tex §7.2).
+        Respostas que chegarem após timeout_seconds são descartadas; se
+        nada chegar a tempo, devolve resultados=[].
         """
         resultados = self.index.search_by_name(msg.query)
         if resultados or msg.ttl <= 0:
@@ -151,7 +151,7 @@ class SearchRouter:
     def _coletar_respostas(
         self, alvos: list[KnownTracker], forward: SearchForward
     ) -> list[SearchResultEntry]:
-        """Dispara as consultas em paralelo e agrega até o deadline (§6.4)."""
+        """Dispara as consultas em paralelo e agrega até o deadline."""
         respostas: queue.Queue[list[SearchResultEntry]] = queue.Queue()
         for alvo in alvos:
             threading.Thread(
@@ -166,7 +166,7 @@ class SearchRouter:
         while pendentes > 0:
             restante = deadline - time.monotonic()
             if restante <= 0:
-                break  # respostas atrasadas são descartadas (§6.4)
+                break  # respostas atrasadas são descartadas
             try:
                 recebidas.extend(respostas.get(timeout=restante))
             except queue.Empty:
@@ -214,7 +214,7 @@ def _mesclar_por_hash(entries: list[SearchResultEntry]) -> list[SearchResultEntr
     """Agrega respostas de vários trackers: um hash aparece uma única vez.
 
     Os índices são réplicas convergentes, então entradas repetidas tendem a
-    ser idênticas; por robustez, a união dos peers (por ``nome_peer``) é
+    ser idênticas; por robustez, a união dos peers (por nome_peer) é
     preservada.
     """
     por_hash: OrderedDict[str, SearchResultEntry] = OrderedDict()

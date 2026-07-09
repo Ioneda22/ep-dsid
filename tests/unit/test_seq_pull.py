@@ -1,10 +1,10 @@
-"""Testes unitários do mecanismo de ``seq`` / vetor de versões / reparo.
+"""Testes unitários do mecanismo de seq / vetor de versões / reparo.
 
-Cobre (main.tex §11.3): alocação de ``seq`` por escrita local, proveniência
-gravada por ``apply_sync_entry`` sem afetar o LWW, detecção de lacuna com
-``desde_seq`` capturado, avanço de ``visto`` por ``max``, pendências,
-comparação de digest e montagem da resposta de ``SYNC_PULL`` (agrupada por
-``seq``, com tombstones, só o estado atual). Relógio fake injetado (§10).
+Cobre: alocação de seq por escrita local, proveniência
+gravada por apply_sync_entry sem afetar o LWW, detecção de lacuna com
+desde_seq capturado, avanço de visto por max, pendências,
+comparação de digest e montagem da resposta de SYNC_PULL (agrupada por
+seq, com tombstones, só o estado atual). Relógio fake injetado.
 """
 
 from __future__ import annotations
@@ -19,7 +19,7 @@ HASH_B = "b" * 64
 
 
 class RelogioFake:
-    """Relógio determinístico injetado no Index (§10)."""
+    """Relógio determinístico injetado no Index."""
 
     def __init__(self, inicio: float = 1000.0) -> None:
         self.agora = inicio

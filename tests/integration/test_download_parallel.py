@@ -1,4 +1,4 @@
-"""Integração da Fase 5: download paralelo entre fontes complementares (§7.4).
+"""Integração de download paralelo entre fontes complementares.
 
 1 tracker + 3 peers. Alice tem os chunks 0-3 e Bob os chunks 2-5 de um arquivo de
 6 chunks. Carol precisa das duas fontes (0/1 só na Alice, 4/5 só no Bob) e o

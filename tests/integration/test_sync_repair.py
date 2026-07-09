@@ -1,16 +1,16 @@
-"""Integração: reconciliação por ``seq`` + ``SYNC_PULL`` + ``SYNC_DIGEST``.
+"""Integração: reconciliação por seq + SYNC_PULL + SYNC_DIGEST.
 
 Sobe 3 trackers reais (API uvicorn + sync server TCP) em portas dinâmicas.
 Simula um delta perdido escrevendo DIRETO no índice do tracker-1 (sem passar
-pela API, logo sem flooding), abrindo uma lacuna de ``seq`` nas réplicas. Valida:
+pela API, logo sem flooding), abrindo uma lacuna de seq nas réplicas. Valida:
 
-* detecção inline: a próxima ``SYNC_TABLE`` daquela origem revela a lacuna, que
-  dispara um ``SYNC_PULL(desde_seq capturado)`` e o índice converge;
+* detecção inline: a próxima SYNC_TABLE daquela origem revela a lacuna, que
+  dispara um SYNC_PULL(desde_seq capturado) e o índice converge;
 * backstop por digest: quando a ÚLTIMA escrita se perde e a origem silencia, um
-  ``SYNC_DIGEST`` detecta e repara;
+  SYNC_DIGEST detecta e repara;
 * reintegração: um tracker que volta reconstrói o índice via
-  ``TRACKER_REJOIN`` -> ``TRACKER_LIST`` -> ``SYNC_PULL(desde_seq=0)``,
-  inicializando ``visto`` e ``meu_seq`` (main.tex §11.3 e §12.3).
+  TRACKER_REJOIN -> TRACKER_LIST -> SYNC_PULL(desde_seq=0),
+  inicializando visto e meu_seq.
 
 Nenhum cenário reenvia o índice inteiro — só o que de fato divergiu.
 """
@@ -175,5 +175,5 @@ def test_reintegracao_reconstroi_indice_e_inicializa_seq(
     # Índice reconstruído (fontes de tracker-1 recuperadas de uma réplica viva).
     assert _hashes_locais(novo_index) == {HASH1, HASH2}
     # meu_seq restaurado = maior seq das entradas com origem == tracker-1 (2),
-    # evitando reuso de seq após reinício sem persistir em disco (main.tex §12.3).
+    # evitando reuso de seq após reinício sem persistir em disco.
     assert novo_index.versoes()["tracker-1"] == 2

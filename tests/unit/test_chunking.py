@@ -16,20 +16,24 @@ from src.common.chunking import (
 
 
 def test_chunk_count_zero() -> None:
+    """Arquivo de 0 bytes não gera nenhum chunk."""
     assert chunk_count(0) == 0
 
 
 def test_chunk_count_exato() -> None:
+    """Tamanho múltiplo exato do chunk_size resulta em n chunks cheios."""
     assert chunk_count(DEFAULT_CHUNK_SIZE) == 1
     assert chunk_count(DEFAULT_CHUNK_SIZE * 4) == 4
 
 
 def test_chunk_count_nao_multiplo() -> None:
+    """Tamanho não múltiplo arredonda para cima (ceil): sobra vira mais um chunk."""
     assert chunk_count(DEFAULT_CHUNK_SIZE + 1) == 2
     assert chunk_count(DEFAULT_CHUNK_SIZE * 3 + 100) == 4
 
 
 def test_chunk_count_invalido() -> None:
+    """Tamanho negativo ou chunk_size igual a zero levantam ValueError."""
     with pytest.raises(ValueError):
         chunk_count(-1)
     with pytest.raises(ValueError):
@@ -37,6 +41,7 @@ def test_chunk_count_invalido() -> None:
 
 
 def test_split_join_multiplo_do_chunk_size(tmp_path: Path) -> None:
+    """Tamanho múltiplo do chunk_size: split gera chunks todos cheios e join reconstrói byte a byte."""
     chunk_size = 1024
     n_chunks = 5
     data = os.urandom(chunk_size * n_chunks)
@@ -72,12 +77,14 @@ def test_split_join_nao_multiplo_do_chunk_size(tmp_path: Path) -> None:
 
 
 def test_split_arquivo_vazio(tmp_path: Path) -> None:
+    """Arquivo vazio produz uma lista de chunks vazia."""
     f = tmp_path / "vazio.bin"
     f.write_bytes(b"")
     assert list(split_file(f)) == []
 
 
 def test_split_chunk_size_invalido(tmp_path: Path) -> None:
+    """chunk_size igual a zero faz split_file levantar ValueError."""
     f = tmp_path / "x.bin"
     f.write_bytes(b"a")
     with pytest.raises(ValueError):
@@ -85,6 +92,7 @@ def test_split_chunk_size_invalido(tmp_path: Path) -> None:
 
 
 def test_join_em_diretorio_existente(tmp_path: Path) -> None:
+    """join_chunks concatena os fragmentos na ordem dada (chunks vazios não somam) e retorna o total de bytes escritos."""
     destino = tmp_path / "out.bin"
     total = join_chunks([b"abc", b"def", b""], destino)
     assert total == 6

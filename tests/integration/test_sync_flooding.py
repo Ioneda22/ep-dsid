@@ -1,10 +1,10 @@
-"""Teste de integração da Fase 4: flooding SYNC_TABLE entre 3 trackers.
+"""Teste de integração: flooding SYNC_TABLE entre 3 trackers.
 
 Sobe 3 trackers reais (API uvicorn + sync server TCP) em portas dinâmicas
 de 127.0.0.1, conectados entre si. Um peer fictício registra um arquivo no
 tracker-1 via REST e, em até 3s, a busca por nome nos trackers 2 e 3
 encontra o hash LOCALMENTE (sem SEARCH_FORWARD — flooding puro), com
-``hash_to_peers`` idêntico nas três réplicas (mesmo timestamp/origem, LWW).
+hash_to_peers idêntico nas três réplicas (mesmo timestamp/origem, LWW).
 """
 
 from __future__ import annotations
@@ -85,8 +85,8 @@ def test_register_no_tracker_1_propaga_aos_demais_em_3s(
     _peer_hello(t1.api_url, "alice", 7001)
     assert _register_file(t1.api_url, "alice", HASH_MUSICA).status_code == 200
 
-    # Critério §12.3 do CLAUDE.md: hash presente nos índices LOCAIS de
-    # tracker-2 e tracker-3 em < 3s (flooding, não forward).
+    # Hash presente nos índices LOCAIS de tracker-2 e tracker-3 em < 3s
+    # (flooding, não forward).
     assert aguardar(
         lambda: all(
             _busca_local(trackers[tid].index, "Imagine") == [HASH_MUSICA]
@@ -133,8 +133,7 @@ def test_peer_leave_file_propaga_tombstone(trackers: dict[str, TrackerNode]) -> 
     )
     assert resposta.status_code == 200
 
-    # §12.9 do CLAUDE.md: em < 3s os demais registram tombstone de alice e
-    # bob segue como fonte.
+    # Em < 3s os demais registram tombstone de alice e bob segue como fonte.
     def _tombstone_em_todos() -> bool:
         for tid in ("tracker-2", "tracker-3"):
             snapshot = trackers[tid].index.get_snapshot()
@@ -160,7 +159,7 @@ def test_tracker_caido_nao_trava_register_e_vira_suspeito(
     inicio = time.monotonic()
     assert _register_file(t1.api_url, "alice", HASH_MUSICA).status_code == 200
     # Flooding é assíncrono (uma thread daemon por destino): a resposta REST
-    # não espera o destino morto (Listing 8.1 / transient asynchronous).
+    # não espera o destino morto (comunicação transiente assíncrona).
     assert time.monotonic() - inicio < 2.0, "REGISTER_FILE bloqueou no tracker caído"
 
     # tracker-2 vira suspeito; tracker-3 recebe normalmente.

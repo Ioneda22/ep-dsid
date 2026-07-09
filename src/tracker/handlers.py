@@ -1,12 +1,12 @@
-"""Lógica de negócio do tracker (§6.1, camada 2).
+"""Lógica de negócio do tracker (camada 2 da arquitetura).
 
 Cada handler recebe uma mensagem já validada (modelos pydantic de
-``src.common.messages``) e as dependências por parâmetro (§14.4) —
-``Index`` e ``TrackerDB`` nunca são globais. Handlers não fazem I/O de
-socket/HTTP: isso é papel da camada API (`src.tracker.api`).
+src.common.messages) e as dependências por parâmetro —
+Index e TrackerDB nunca são globais. Handlers não fazem I/O de
+socket/HTTP: isso é papel da camada API (src.tracker.api).
 
-Erros de domínio sobem como exceções de ``src.common.errors``; a camada
-API as converte em mensagens ``ERROR``.
+Erros de domínio sobem como exceções de src.common.errors; a camada
+API as converte em mensagens ERROR.
 """
 
 from __future__ import annotations
@@ -32,13 +32,13 @@ from src.tracker.sync_client import SyncClient
 
 logger = logging.getLogger(__name__)
 
-#: Resposta das operações de escrita: ``{"status": "ok"}`` e, quando o rebalance
-#: agendou uma migração para este peer, também ``reassign_to`` (main.tex §12.4).
+#: Resposta das operações de escrita: {"status": "ok"} e, quando o rebalance
+#: agendou uma migração para este peer, também reassign_to (destino do REASSIGN_TRACKER).
 AckOk = dict[str, Any]
 
 
 def _ack(index: Index | None = None, nome_peer: str | None = None) -> AckOk:
-    """Monta o ACK, anexando ``reassign_to`` se houver migração pendente ao peer."""
+    """Monta o ACK, anexando reassign_to se houver migração pendente ao peer."""
     resposta: AckOk = {"status": "ok"}
     if index is not None and nome_peer is not None:
         alvo = index.consumir_reassign(nome_peer)
@@ -51,7 +51,7 @@ def _ack(index: Index | None = None, nome_peer: str | None = None) -> AckOk:
 
 
 def _propagar(sync_client: SyncClient | None, delta: LocalDelta | None) -> None:
-    """Floods as entradas de um evento multi-hash com o ``seq``/``timestamp`` únicos."""
+    """Floods as entradas de um evento multi-hash com o seq/timestamp únicos."""
     if sync_client is None or delta is None:
         return
     sync_client.propagar_sync(delta.entries, seq=delta.seq, timestamp=delta.timestamp)
@@ -70,7 +70,7 @@ def handle_peer_hello(msg: PeerHello, index: Index, db: TrackerDB) -> AckOk:
 def handle_peer_leave(
     msg: PeerLeave, index: Index, sync_client: SyncClient | None = None
 ) -> AckOk:
-    """Saída ordenada: remove o peer, tombstona suas fontes e propaga (main.tex §13.4)."""
+    """Saída ordenada: remove o peer, tombstona suas fontes e propaga o delta aos demais trackers."""
     delta = index.remove_peer(msg.nome_peer)
     logger.info("PEER_LEAVE: nome_peer=%s", msg.nome_peer)
     _propagar(sync_client, delta)
@@ -92,12 +92,12 @@ def handle_update_ip(msg: UpdateIp, index: Index) -> AckOk:
 def handle_seed_report(
     msg: SeedReport, index: Index, sync_client: SyncClient | None = None
 ) -> AckOk:
-    """Sinal de vida + anti-entropy do índice (main.tex §7.2).
+    """Sinal de vida + anti-entropy do índice.
 
     Re-registra a presença (o relatório carrega ip/porta justamente para
     reconstruir o índice após restart do tracker), reconcilia os hashes (hash
     omitido equivale a PEER_LEAVE_FILE) e propaga o delta resultante via
-    ``SYNC_TABLE`` — a detecção por ``seq``/digest é backstop.
+    SYNC_TABLE — a detecção por seq/digest é backstop.
     """
     index.register_peer(msg.nome_peer, msg.ip, msg.porta)
     delta = index.apply_seed_hashes(msg.nome_peer, set(msg.hashes))
@@ -113,8 +113,8 @@ def handle_register_file(
 ) -> AckOk:
     """Registra upload original ou re-registro pós-download.
 
-    Com ``sync_client``, propaga a atualização via flooding ``SYNC_TABLE``
-    (main.tex, fluxo de upload) SEM bloquear a resposta REST — cada destino
+    Com sync_client, propaga a atualização via flooding SYNC_TABLE
+    (fluxo de upload) SEM bloquear a resposta REST — cada destino
     recebe em thread daemon própria. O timestamp propagado é o MESMO
     gravado no índice local, para o LWW convergir entre réplicas.
     """
@@ -153,8 +153,8 @@ def handle_peer_leave_file(
 ) -> AckOk:
     """Remove o peer como fonte de um hash (vira tombstone).
 
-    Com ``sync_client``, propaga o tombstone via ``SYNC_TABLE`` com
-    ``ativo=False`` e o timestamp gravado localmente (main.tex §12.3).
+    Com sync_client, propaga o tombstone via SYNC_TABLE com
+    ativo=False e o timestamp gravado localmente.
     """
     tombstone = index.remove_peer_from_hash(msg.hash, msg.nome_peer)
     logger.info("PEER_LEAVE_FILE: nome_peer=%s hash=%s", msg.nome_peer, msg.hash)
@@ -178,10 +178,10 @@ def handle_peer_leave_file(
 def handle_search_file(
     msg: SearchFile, index: Index, search_router: SearchRouter | None = None
 ) -> SearchResult:
-    """Busca por nome exato; com ``search_router``, roteia via SEARCH_FORWARD.
+    """Busca por nome exato; com search_router, roteia via SEARCH_FORWARD.
 
     Sem router (testes/uso isolado), a busca é apenas local.
-    ``resultados=[]`` significa "nada encontrado" (main.tex §7.2).
+    resultados=[] significa "nada encontrado".
     """
     if search_router is not None:
         return search_router.handle_search_file_with_forwarding(msg)

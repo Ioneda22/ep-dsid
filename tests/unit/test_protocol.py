@@ -1,10 +1,10 @@
 """Testes unitários para src/common/protocol.py.
 
-Usa ``socket.socketpair`` para roundtrip sem rede real. No Windows o socketpair
+Usa socket.socketpair para roundtrip sem rede real. No Windows o socketpair
 da stdlib emula com AF_INET — funciona normalmente para nossos propósitos.
 
-Toda recepção passa pelo método único :meth:`MessageReader.recv_message`
-(cf. docstring de ``src/common/protocol.py``).
+Toda recepção passa pelo método único MessageReader.recv_message
+(cf. docstring de src/common/protocol.py).
 """
 
 from __future__ import annotations
@@ -238,12 +238,12 @@ def test_multiplos_chunks_na_mesma_conexao() -> None:
 
 
 def test_mistura_json_pura_e_chunk_mesmo_reader() -> None:
-    """Fluxo real do downloader (§7.4 CLAUDE.md): CHUNK_LIST seguida de CHUNK_DATA.
+    """Fluxo real do downloader: CHUNK_LIST seguida de CHUNK_DATA.
 
-    Mesma conexão, mesmo reader, **mesmo método**. Sem buffer compartilhado, o
+    Mesma conexão, mesmo reader, mesmo método. Sem buffer compartilhado, o
     início do cabeçalho do CHUNK_DATA seria perdido ao ler o CHUNK_LIST. Sem
     o método unificado, o receptor precisaria escolher manualmente entre dois
-    leitores — exatamente o foot-gun que ``recv_message`` elimina.
+    leitores — exatamente o foot-gun que recv_message elimina.
     """
     cliente, servidor = _socketpair()
     try:

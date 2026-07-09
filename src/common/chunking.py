@@ -1,8 +1,8 @@
 """Divisão e reconstrução de arquivos em chunks de tamanho fixo.
 
-O PeerSpot usa chunks de 256 KiB (262144 bytes) por padrão, conforme §7.3 do
-``CLAUDE.md``. O último chunk pode ser menor — o tamanho total do arquivo não
-precisa ser múltiplo de ``chunk_size``.
+O PeerSpot usa chunks de 256 KiB (262144 bytes) por padrão. O último chunk
+pode ser menor — o tamanho total do arquivo não precisa ser múltiplo de
+chunk_size.
 """
 
 from __future__ import annotations
@@ -16,7 +16,7 @@ DEFAULT_CHUNK_SIZE = 262144
 
 
 def chunk_count(file_size: int, chunk_size: int = DEFAULT_CHUNK_SIZE) -> int:
-    """Calcula quantos chunks compõem um arquivo de tamanho ``file_size``.
+    """Calcula quantos chunks compõem um arquivo de tamanho file_size.
 
     Args:
         file_size: Tamanho total do arquivo em bytes (>= 0).
@@ -26,7 +26,7 @@ def chunk_count(file_size: int, chunk_size: int = DEFAULT_CHUNK_SIZE) -> int:
         Número de chunks. Arquivo vazio retorna 0.
 
     Raises:
-        ValueError: Se ``file_size`` < 0 ou ``chunk_size`` <= 0.
+        ValueError: Se file_size < 0 ou chunk_size <= 0.
     """
     if file_size < 0:
         raise ValueError(f"file_size deve ser >= 0; recebido {file_size}")
@@ -40,7 +40,7 @@ def chunk_count(file_size: int, chunk_size: int = DEFAULT_CHUNK_SIZE) -> int:
 def split_file(path: Path, chunk_size: int = DEFAULT_CHUNK_SIZE) -> Iterator[bytes]:
     """Itera sobre os chunks de um arquivo, em ordem do início ao fim.
 
-    Cada chunk tem exatamente ``chunk_size`` bytes, exceto possivelmente o
+    Cada chunk tem exatamente chunk_size bytes, exceto possivelmente o
     último, que pode ser menor. O arquivo é lido sob demanda — adequado para
     arquivos grandes.
 
@@ -52,8 +52,8 @@ def split_file(path: Path, chunk_size: int = DEFAULT_CHUNK_SIZE) -> Iterator[byt
         Bytes de cada chunk, em ordem.
 
     Raises:
-        FileNotFoundError: Se ``path`` não existir.
-        ValueError: Se ``chunk_size`` <= 0.
+        FileNotFoundError: Se path não existir.
+        ValueError: Se chunk_size <= 0.
     """
     if chunk_size <= 0:
         raise ValueError(f"chunk_size deve ser > 0; recebido {chunk_size}")

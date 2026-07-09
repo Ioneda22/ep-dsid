@@ -1,15 +1,14 @@
-"""Comunicação outbound entre trackers — flooding, pull e digest (§6.1, camada 4).
+"""Comunicação outbound entre trackers — flooding, pull e digest.
 
-Espelha o Listing 8.1 do ``main.tex`` (``propagar_sync`` / ``enviar_unicast``)
-com ``socket`` + ``threading`` — NUNCA asyncio (§11.2). Em vez das globals do
-listing, as dependências entram por construtor (§14.4).
+Usa socket + threading (propagar_sync / enviar_unicast) — nunca
+asyncio. As dependências entram por construtor, não por estado global.
 
-O envio de ``SYNC_TABLE`` e ``SYNC_DIGEST`` é *transient asynchronous*: uma
+O envio de SYNC_TABLE e SYNC_DIGEST é transient asynchronous: uma
 thread por tracker conhecido, sem aguardar confirmação. Falha de conexão marca
 o tracker como suspeito e NÃO retransmite — quem perdeu o delta o repara
-sozinho puxando com ``SYNC_PULL`` (detecção inline ou digest periódico,
-main.tex §11.3). O ``SYNC_PULL`` em si é request/response na MESMA conexão TCP
-(padrão do ``SEARCH_FORWARD``): a resposta são uma ou mais ``SYNC_TABLE``.
+sozinho puxando com SYNC_PULL (detecção inline ou digest periódico). O
+SYNC_PULL em si é request/response na MESMA conexão TCP (padrão do
+SEARCH_FORWARD): a resposta são uma ou mais SYNC_TABLE.
 """
 
 from __future__ import annotations
@@ -47,7 +46,7 @@ logger = logging.getLogger(__name__)
 
 @dataclass(frozen=True)
 class KnownTracker:
-    """Endereço de sincronização de um tracker conhecido (YAML §6.6)."""
+    """Endereço de sincronização de um tracker conhecido (lido do YAML)."""
 
     tracker_id: str
     ip: str
@@ -81,7 +80,7 @@ class SyncClient:
         self._suspeitos: set[str] = set()
 
     # ------------------------------------------------------------------
-    # Flooding de escritas (SYNC_TABLE) — Listing 8.1 do main.tex
+    # Flooding de escritas (SYNC_TABLE)
     # ------------------------------------------------------------------
 
     def propagar_sync(
@@ -90,11 +89,11 @@ class SyncClient:
         seq: int,
         timestamp: float | None = None,
     ) -> None:
-        """Dispara ``SYNC_TABLE`` em paralelo para cada tracker conhecido.
+        """Dispara SYNC_TABLE em paralelo para cada tracker conhecido.
 
-        Uma thread daemon por destino (flooding, Listing 8.1); o chamador não
-        bloqueia esperando rede. ``seq`` é o contador local da escrita e
-        ``timestamp`` deve ser o MESMO gravado no índice local, para o LWW
+        Uma thread daemon por destino (flooding); o chamador não bloqueia
+        esperando rede. seq é o contador local da escrita e
+        timestamp deve ser o MESMO gravado no índice local, para o LWW
         convergir entre as réplicas; quando omitido, usa o relógio corrente.
         """
         if not self.known_trackers:
@@ -108,11 +107,11 @@ class SyncClient:
         self._floodar(mensagem, rotulo="sync-out")
 
     def propagar_digest(self, versoes: dict[str, int]) -> None:
-        """Floods ``SYNC_DIGEST`` (vetor de versões) a cada tracker conhecido.
+        """Floods SYNC_DIGEST (vetor de versões) a cada tracker conhecido.
 
-        One-shot *best-effort* como ``propagar_sync`` — falha marca o destino
+        One-shot best-effort como propagar_sync — falha marca o destino
         suspeito e não retransmite; o próprio destino, ao comparar o digest,
-        puxa o que faltar (main.tex §11.3, "Digest de versões").
+        puxa o que faltar.
         """
         if not self.known_trackers:
             return
@@ -130,14 +129,14 @@ class SyncClient:
             ).start()
 
     def enviar_unicast(self, tracker: KnownTracker, mensagem: dict[str, Any]) -> bool:
-        """Envia uma mensagem JSON one-shot ao ``sync_port`` de um tracker.
+        """Envia uma mensagem JSON one-shot ao sync_port de um tracker.
 
         Em timeout/recusa de conexão, marca o tracker como suspeito e NÃO
-        retransmite (Listing 8.1): a reconciliação ocorre via ``SYNC_DIGEST`` /
-        ``SYNC_PULL`` puxados pelo próprio destino.
+        retransmite: a reconciliação ocorre via SYNC_DIGEST /
+        SYNC_PULL puxados pelo próprio destino.
 
         Returns:
-            ``True`` se a mensagem foi entregue ao socket com sucesso.
+            True se a mensagem foi entregue ao socket com sucesso.
         """
         try:
             with socket.create_connection(
@@ -168,7 +167,7 @@ class SyncClient:
     # ------------------------------------------------------------------
 
     def solicitar_pull_de(self, destino_id: str, faltando: list[SyncPullItem]) -> None:
-        """Dispara (em thread daemon) um ``SYNC_PULL`` a ``destino_id``.
+        """Dispara (em thread daemon) um SYNC_PULL a destino_id.
 
         Fire-and-forget: não bloqueia o handler de sincronização que detectou a
         lacuna. Se o destino não for conhecido, apenas loga (não deveria
@@ -192,17 +191,17 @@ class SyncClient:
     def solicitar_pull(
         self, destino: KnownTracker, faltando: list[SyncPullItem]
     ) -> int:
-        """Envia ``SYNC_PULL`` a ``destino`` e aplica as ``SYNC_TABLE`` de resposta.
+        """Envia SYNC_PULL a destino e aplica as SYNC_TABLE de resposta.
 
         A resposta vem na MESMA conexão TCP do pedido (padrão do
-        ``SEARCH_FORWARD``): uma ou mais ``SYNC_TABLE`` (um evento por ``seq``),
+        SEARCH_FORWARD): uma ou mais SYNC_TABLE (um evento por seq),
         encerradas pelo fechamento da conexão pelo respondente. Cada uma é
-        aplicada por LWW e AVANÇA o ``visto`` sem detecção de lacuna — o próprio
+        aplicada por LWW e AVANÇA o visto sem detecção de lacuna — o próprio
         reparo não deve disparar novos pulls. Ao fim, fecha as pendências das
-        origens pedidas (main.tex §11.3).
+        origens pedidas.
 
         Returns:
-            Quantas entradas ``(hash, peer)`` foram efetivamente aplicadas.
+            Quantas entradas (hash, peer) foram efetivamente aplicadas.
         """
         if self.index is None or not faltando:
             return 0
@@ -241,10 +240,10 @@ class SyncClient:
         return aplicadas
 
     def _aplicar_resposta_pull(self, header: dict[str, Any]) -> int:
-        """Aplica uma ``SYNC_TABLE`` de resposta: LWW + avanço de ``visto``.
+        """Aplica uma SYNC_TABLE de resposta: LWW + avanço de visto.
 
-        O ``origem`` da resposta é o autor ORIGINAL das escritas (não o
-        respondente), então o ``visto`` avança na origem certa.
+        O origem da resposta é o autor ORIGINAL das escritas (não o
+        respondente), então o visto avança na origem certa.
         """
         assert self.index is not None
         msg = SyncTable.model_validate(header)
@@ -263,11 +262,11 @@ class SyncClient:
 
         O bootstrap não é um nó fixo: o tracker que volta percorre a sua lista de
         conhecidos (na ordem do YAML) e usa como ponto de entrada o primeiro
-        reachable. Dele recebe a membership (``TRACKER_LIST``) e reconstrói o
-        índice como caso particular do reparo — um ``SYNC_PULL(desde_seq=0)`` por
-        origem conhecida (inclusive a própria). Ao aplicar as respostas, ``visto``
-        e ``meu_seq`` são inicializados (via ``avancar_visto``), evitando reuso de
-        ``seq`` após reinício sem persistir em disco (main.tex §12.3).
+        reachable. Dele recebe a membership (TRACKER_LIST) e reconstrói o
+        índice como caso particular do reparo — um SYNC_PULL(desde_seq=0) por
+        origem conhecida (inclusive a própria). Ao aplicar as respostas, visto
+        e meu_seq são inicializados (via avancar_visto), evitando reuso de
+        seq após reinício sem persistir em disco.
 
         Returns:
             Quantas entradas foram reconstruídas (0 se nenhum conhecido respondeu).
@@ -304,10 +303,10 @@ class SyncClient:
     def _solicitar_tracker_list(
         self, candidato: KnownTracker, meu_ip: str, meu_sync_port: int
     ) -> list[TrackerListItem] | None:
-        """Envia ``TRACKER_REJOIN`` a ``candidato`` e lê o ``TRACKER_LIST``.
+        """Envia TRACKER_REJOIN a candidato e lê o TRACKER_LIST.
 
         Returns:
-            A membership recebida, ou ``None`` se ``candidato`` não aceitou a
+            A membership recebida, ou None se candidato não aceitou a
             conexão / respondeu inválido (o chamador tenta o próximo conhecido).
         """
         rejoin = TrackerRejoin(
@@ -348,7 +347,7 @@ class SyncClient:
     # ------------------------------------------------------------------
 
     def tracker_por_id(self, tracker_id: str) -> KnownTracker | None:
-        """Resolve um ``tracker_id`` no ``KnownTracker`` correspondente."""
+        """Resolve um tracker_id no KnownTracker correspondente."""
         for tracker in self.known_trackers:
             if tracker.tracker_id == tracker_id:
                 return tracker
@@ -357,7 +356,7 @@ class SyncClient:
     def adicionar_tracker(self, tracker: KnownTracker) -> None:
         """Acrescenta um tracker à membership se ainda não conhecido (idempotente).
 
-        Usado ao processar ``TRACKER_ANNOUNCE``. Na topologia estática do
+        Usado ao processar TRACKER_ANNOUNCE. Na topologia estática do
         protótipo todos já se conhecem do YAML, então é normalmente um no-op.
         """
         if self.tracker_por_id(tracker.tracker_id) is None:

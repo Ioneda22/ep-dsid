@@ -1,4 +1,4 @@
-"""Testes unitários do índice em memória do tracker (Fase 2)."""
+"""Testes unitários do índice em memória do tracker."""
 
 from __future__ import annotations
 
@@ -13,7 +13,7 @@ HASH_B = "b" * 64
 
 
 class RelogioFake:
-    """Relógio determinístico injetado no Index (§10: sem monkeypatch global)."""
+    """Relógio determinístico injetado no Index (evita monkeypatch global)."""
 
     def __init__(self, inicio: float = 1000.0) -> None:
         self.agora = inicio
@@ -193,7 +193,7 @@ def test_update_peer_address_desconhecido(indice: Index) -> None:
 
 
 def test_apply_seed_hashes_remove_hash_omitido(indice: Index) -> None:
-    # main.tex §7.2: omitir o hash no SEED_REPORT equivale a PEER_LEAVE_FILE.
+    # Omitir o hash no SEED_REPORT equivale a PEER_LEAVE_FILE (vira tombstone).
     _hello_e_upload(indice)
     indice.apply_seed_hashes("alice", set())
     assert indice.get_peers_for_hash(HASH_A) == []
@@ -225,7 +225,7 @@ def test_apply_seed_hashes_preserva_timestamp_de_fonte_existente(
 
 
 # ---------------------------------------------------------------------------
-# Snapshot e retornos para propagação (Fase 4)
+# Snapshot e retornos para propagação via SYNC_TABLE
 # ---------------------------------------------------------------------------
 
 
@@ -275,7 +275,7 @@ def test_apply_sync_entry_registra_fonte_remota(indice: Index) -> None:
     assert [(p.nome_peer, p.ip, p.porta) for p in fontes] == [
         ("bob", "127.0.0.1", 7002)
     ]
-    # Metadados da entry permitem busca por nome local (extensão Listing 7.2).
+    # Metadados da entry permitem busca por nome local no tracker que recebe.
     assert indice.search_by_name("Imagine")[0].hash == HASH_A
     # Presença NÃO é tocada: bob reporta SEED_REPORT ao tracker dele.
     assert "bob" not in indice.get_snapshot().nome_peer_to_endereco

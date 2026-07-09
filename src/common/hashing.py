@@ -1,7 +1,7 @@
 """Funções de hashing SHA-256 utilizadas como identificador de arquivos.
 
 O identificador de cada arquivo no PeerSpot é o SHA-256 hex do conteúdo
-completo (não dos chunks individuais), conforme §7.3 do ``CLAUDE.md``.
+completo (não dos chunks individuais).
 """
 
 from __future__ import annotations
@@ -9,7 +9,7 @@ from __future__ import annotations
 import hashlib
 from pathlib import Path
 
-#: Tamanho do bloco usado por :func:`sha256_file` ao ler do disco.
+#: Tamanho do bloco usado por sha256_file ao ler do disco.
 _READ_BUFFER_BYTES = 1024 * 1024  # 1 MiB
 
 
@@ -38,7 +38,7 @@ def sha256_file(path: Path) -> str:
         Hash SHA-256 em hexadecimal minúsculo (64 caracteres).
 
     Raises:
-        FileNotFoundError: Se ``path`` não existir.
+        FileNotFoundError: Se path não existir.
         OSError: Em falha de leitura.
     """
     h = hashlib.sha256()

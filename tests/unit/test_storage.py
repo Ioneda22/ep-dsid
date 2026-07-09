@@ -1,4 +1,4 @@
-"""Testes unitários de ``src.peer.storage`` (Fase 3)."""
+"""Testes unitários de src.peer.storage — armazenamento local de chunks e montagem de arquivos no peer."""
 
 from __future__ import annotations
 

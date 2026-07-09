@@ -1,7 +1,7 @@
 """Parsing de arquivos de configuração YAML.
 
-Os arquivos vivem em ``config/*.yaml`` e são lidos no boot de cada nó. Esta
-camada apenas converte YAML em ``dict`` e oferece uma validação leve de
+Os arquivos vivem em config/*.yaml e são lidos no boot de cada nó. Esta
+camada apenas converte YAML em dict e oferece uma validação leve de
 campos obrigatórios; consumidores (tracker/peer) traduzem o dict em uma
 dataclass tipada antes de usar.
 """
@@ -20,7 +20,7 @@ class ConfigError(Exception):
 
 
 def load_yaml(path: Path) -> dict[str, Any]:
-    """Carrega um arquivo YAML e devolve seu conteúdo como ``dict``.
+    """Carrega um arquivo YAML e devolve seu conteúdo como dict.
 
     Args:
         path: Caminho do arquivo YAML.
@@ -50,7 +50,7 @@ def load_yaml(path: Path) -> dict[str, Any]:
 
 
 def require_keys(cfg: dict[str, Any], keys: Iterable[str], origem: str) -> None:
-    """Valida que todas as chaves de ``keys`` estão presentes em ``cfg``.
+    """Valida que todas as chaves de keys estão presentes em cfg.
 
     Args:
         cfg: Dicionário de configuração já carregado.

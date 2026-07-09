@@ -1,13 +1,13 @@
-"""Camada REST do tracker — FastAPI (§6.1, camada 1).
+"""Camada REST do tracker — FastAPI (rotas REST para peers).
 
-Os corpos das rotas são os próprios modelos pydantic do Listing 7.2
-(``src.common.messages``) — uma única fonte de verdade para schema e
+Os corpos das rotas são os próprios modelos pydantic
+(src.common.messages) — uma única fonte de verdade para schema e
 validação. Cada rota delega ao handler correspondente em
-``src.tracker.handlers``. As rotas são ``def`` síncronas de propósito:
+src.tracker.handlers. As rotas são def síncronas de propósito:
 o uvicorn as despacha num threadpool, o que combina com o
-``threading.Lock`` do ``Index`` sem bloquear o event loop.
+threading.Lock do Index sem bloquear o event loop.
 
-Erros de domínio (``PeerSpotError``) viram mensagens ``ERROR`` do
+Erros de domínio (PeerSpotError) viram mensagens ERROR do
 protocolo com status HTTP correspondente.
 """
 
@@ -53,7 +53,7 @@ _HTTP_STATUS_POR_CODIGO: dict[str, int] = {
     errors.INTERNAL_ERROR: 500,
 }
 
-#: ``ref_type`` da mensagem ERROR, derivado da rota que falhou.
+#: ref_type da mensagem ERROR, derivado da rota que falhou.
 _REF_TYPE_POR_ROTA: dict[str, str] = {
     "/peers/hello": "PEER_HELLO",
     "/peers/leave": "PEER_LEAVE",
@@ -66,14 +66,14 @@ _REF_TYPE_POR_ROTA: dict[str, str] = {
 
 
 class CriarPlaylistBody(BaseModel):
-    """Corpo de ``POST /playlists`` — playlists são dados de usuário (§7.2)."""
+    """Corpo de POST /playlists — playlists são dados de usuário."""
 
     dono: str
     nome: str
 
 
 class AdicionarItemBody(BaseModel):
-    """Corpo de ``POST /playlists/{id}/items``."""
+    """Corpo de POST /playlists/{id}/items."""
 
     hash: str
 
@@ -86,19 +86,19 @@ def create_app(
     sync_client: SyncClient | None = None,
     search_router: SearchRouter | None = None,
 ) -> FastAPI:
-    """Monta o app FastAPI do tracker com dependências injetadas (§14.4).
+    """Monta o app FastAPI do tracker com dependências injetadas.
 
     Args:
         index: Índice em memória compartilhado do tracker.
         db: Persistência SQLite (usuários, playlists).
-        tracker_id: Identificador deste tracker (ex.: ``"tracker-1"``).
+        tracker_id: Identificador deste tracker (ex.: "tracker-1").
         trackers_conhecidos: Lista de trackers (incluindo este) exposta em
-            ``GET /trackers`` — espelha o ``trackers_conhecidos`` do
-            ``TRACKER_LIST`` (membership da reintegração).
-        sync_client: Flooding ``SYNC_TABLE`` aos demais trackers (Fase 4);
-            ``None`` desliga a propagação (tracker isolado/testes).
-        search_router: Roteamento ``SEARCH_FORWARD`` quando a busca local
-            não tem hit (Fase 4); ``None`` limita a busca ao índice local.
+            GET /trackers — espelha o trackers_conhecidos do
+            TRACKER_LIST (membership da reintegração).
+        sync_client: Flooding SYNC_TABLE aos demais trackers;
+            None desliga a propagação (tracker isolado/testes).
+        search_router: Roteamento SEARCH_FORWARD quando a busca local
+            não tem hit; None limita a busca ao índice local.
 
     Returns:
         App pronto para ser servido pelo uvicorn.
@@ -167,9 +167,9 @@ def create_app(
         return handlers.handle_search_file(body, index, search_router)
 
     # ------------------------------------------------------------------
-    # Playlists (Fase 6) — CRUD local ao tracker, NÃO propagado por sync.
-    # Rotas de ``id`` usam o convertor ``:int`` para não colidirem com
-    # ``GET /playlists/{dono}`` (regex ``[0-9]+`` vs. nome de peer).
+    # Playlists — CRUD local ao tracker, NÃO propagado por sync.
+    # Rotas de id usam o convertor :int para não colidirem com
+    # GET /playlists/{dono} (regex [0-9]+ vs. nome de peer).
     # ------------------------------------------------------------------
 
     @app.post("/playlists")

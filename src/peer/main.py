@@ -1,8 +1,8 @@
-"""Entrypoint do peer: ``python -m src.peer.main --config config/peer-alice.yaml``.
+"""Entrypoint do peer: python -m src.peer.main --config config/peer-alice.yaml.
 
-Fase 3: sobe o TCP server de chunks (thread daemon), o seed reporter
-(stub), envia ``PEER_HELLO`` ao primeiro tracker da lista e entra no
-loop da CLI. No ``quit``, envia ``PEER_LEAVE`` e encerra as threads.
+Sobe o servidor TCP de chunks (thread daemon) e o seed reporter, envia
+PEER_HELLO ao primeiro tracker da lista e entra no loop da CLI. No
+quit, envia PEER_LEAVE e encerra as threads e conexões.
 """
 
 from __future__ import annotations
@@ -39,7 +39,7 @@ _CHAVES_OBRIGATORIAS = (
 
 @dataclass
 class PeerSettings:
-    """Configuração de um peer carregada do YAML (§7.6)."""
+    """Configuração de um peer carregada do YAML."""
 
     nome_peer: str
     ip: str
@@ -48,11 +48,11 @@ class PeerSettings:
     log_path: Path
     log_level: str
     trackers: list[dict[str, Any]]
-    # Constantes operacionais (§7.6).
+    # Constantes operacionais com valores padrão.
     chunk_size_bytes: int = 262144
     seed_report_interval_seconds: int = 180
     chunk_request_timeout_seconds: int = 10
-    download_pool_size: int = 8  # usado a partir da Fase 5 (paralelo)
+    download_pool_size: int = 8  # nº de threads do download paralelo
 
 
 def load_peer_settings(config_path: Path) -> PeerSettings:

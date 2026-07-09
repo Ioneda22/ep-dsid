@@ -1,9 +1,9 @@
-"""Integração da Fase 5: detecção de falha de peer, END-TO-END (§6.3, main.tex §13.4).
+"""Integração da detecção de falha de peer, END-TO-END.
 
 Dois trackers REAIS (API uvicorn + sync server TCP). alice registra dois arquivos
-no tracker-1 e some (sem ``PEER_LEAVE``); bob renova a presença. Com o relógio
-injetado avançado 7 min (> 6 min = 2 rodadas), o ``FailureDetector`` REAL do
-tracker-1 tombstona alice e propaga via ``SYNC_TABLE`` — e verificamos o tombstone
+no tracker-1 e some (sem PEER_LEAVE); bob renova a presença. Com o relógio
+injetado avançado 7 min (> 6 min = 2 rodadas), o FailureDetector REAL do
+tracker-1 tombstona alice e propaga via SYNC_TABLE — e verificamos o tombstone
 CHEGANDO de fato ao índice do tracker-2 (sem nenhum dublê de sincronização).
 """
 
@@ -23,7 +23,7 @@ HASH_B = "bb" * 32
 
 
 class RelogioFake:
-    """Relógio mutável injetável (§10): sem monkeypatch global."""
+    """Relógio mutável injetável: evita monkeypatch global e torna o teste determinístico."""
 
     def __init__(self, inicio: float = 1000.0) -> None:
         self.agora = inicio

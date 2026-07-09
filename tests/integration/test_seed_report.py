@@ -1,8 +1,8 @@
-"""Integração da Fase 5: anti-entropy do ``SEED_REPORT`` (§9, main.tex §13.4).
+"""Integração: anti-entropy via SEED_REPORT.
 
 Um peer registra um arquivo, apaga-o localmente SEM notificar o tracker e, no
-ciclo seguinte de ``SEED_REPORT``, o hash omitido vira tombstone no índice — a
-detecção não depende de ``PEER_LEAVE_FILE``.
+ciclo seguinte de SEED_REPORT, o hash omitido vira tombstone no índice — a
+detecção não depende de PEER_LEAVE_FILE.
 """
 
 from __future__ import annotations
@@ -94,7 +94,7 @@ def test_seed_report_omitido_vira_tombstone(
         assert _tem_fonte(index, hash_arquivo, "alice")
 
         # Apaga o arquivo localmente sem notificar o tracker; o próximo relatório
-        # omite o hash -> tombstone (main.tex §13.4).
+        # omite o hash -> tombstone.
         storage.remove_file(hash_arquivo)
         assert storage.list_local_files() == []
         assert reporter.enviar_agora()

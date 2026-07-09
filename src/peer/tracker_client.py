@@ -1,18 +1,18 @@
-"""Cliente REST do peer para o tracker, com fallback completo (§7.5).
+"""Cliente REST do peer para o tracker, com fallback completo.
 
-O peer mantém a lista ordenada ``trackers`` do YAML e um ``current_tracker_index``
+O peer mantém a lista ordenada trackers do YAML e um current_tracker_index
 que NÃO reseta a cada chamada. Em timeout/ConnectionRefused do tracker atual, o
 cliente avança para o próximo da lista (e, por ser uma troca de tracker, reenvia
-``PEER_HELLO`` ao novo antes de retomar a operação). Se TODOS falharem, levanta
-:class:`TodosTrackersIndisponiveis` — a CLI mostra o erro ao usuário.
+PEER_HELLO ao novo antes de retomar a operação). Se TODOS falharem, levanta
+TodosTrackersIndisponiveis — a CLI mostra o erro ao usuário.
 
-Rebalance (main.tex §12.4): quando a resposta de uma chamada traz ``reassign_to``,
+Rebalance: quando a resposta de uma chamada traz reassign_to,
 o cliente migra para o tracker indicado (adicionando-o à lista se necessário) e se
-reapresenta lá — simplificação aceita para entregar o ``REASSIGN_TRACKER`` sobre
+reapresenta lá — simplificação aceita para entregar o REASSIGN_TRACKER sobre
 REST, sem um canal push tracker→peer.
 
-Erros que NÃO são de conectividade (HTTP 4xx/5xx) continuam retornando ``None``:
-cada método loga e devolve ``None``, deixando a camada acima decidir a mensagem.
+Erros que NÃO são de conectividade (HTTP 4xx/5xx) continuam retornando None:
+cada método loga e devolve None, deixando a camada acima decidir a mensagem.
 """
 
 from __future__ import annotations
@@ -37,7 +37,7 @@ logger = logging.getLogger(__name__)
 
 
 class TodosTrackersIndisponiveis(Exception):
-    """Nenhum tracker da lista de fallback respondeu (§7.5)."""
+    """Nenhum tracker da lista de fallback respondeu."""
 
 
 class PeerTrackerClient:
@@ -47,12 +47,12 @@ class PeerTrackerClient:
         """Inicializa o cliente apontando para o primeiro tracker da lista.
 
         Args:
-            trackers: Lista ``trackers`` do YAML do peer; cada item tem
-                ``tracker_id``, ``ip`` e ``api_port``.
+            trackers: Lista trackers do YAML do peer; cada item tem
+                tracker_id, ip e api_port.
             timeout: Timeout em segundos para cada requisição.
 
         Raises:
-            ValueError: Se ``trackers`` estiver vazia.
+            ValueError: Se trackers estiver vazia.
         """
         if not trackers:
             raise ValueError("lista de trackers vazia; esperado ao menos um")
@@ -67,13 +67,13 @@ class PeerTrackerClient:
 
     @property
     def tracker_id(self) -> str:
-        """``tracker_id`` do tracker atualmente em uso."""
+        """tracker_id do tracker atualmente em uso."""
         atual = self._trackers[self.current_tracker_index]
         return str(atual.get("tracker_id", self._base_url(self.current_tracker_index)))
 
     @property
     def trackers_conhecidos(self) -> list[str]:
-        """Ids (ou URLs) de todos os trackers da lista de fallback (§7.2, status)."""
+        """Ids (ou URLs) de todos os trackers da lista de fallback (usado no status)."""
         return [self._id(i) for i in range(len(self._trackers))]
 
     def close(self) -> None:
@@ -87,20 +87,20 @@ class PeerTrackerClient:
     # ------------------------------------------------------------------
 
     def peer_hello(self, nome_peer: str, ip: str, porta: int) -> dict[str, Any] | None:
-        """Envia ``PEER_HELLO`` e memoriza a identidade para futuros fallbacks."""
+        """Envia PEER_HELLO e memoriza a identidade para futuros fallbacks."""
         self._identidade = (nome_peer, ip, porta)
         corpo = PeerHello(nome_peer=nome_peer, ip=ip, porta=porta)
         return self._post("/peers/hello", corpo.model_dump())
 
     def peer_leave(self, nome_peer: str) -> dict[str, Any] | None:
-        """Envia ``PEER_LEAVE`` (saída ordenada)."""
+        """Envia PEER_LEAVE (saída ordenada)."""
         corpo = PeerLeave(nome_peer=nome_peer)
         return self._post("/peers/leave", corpo.model_dump())
 
     def seed_report(
         self, nome_peer: str, ip: str, porta: int, hashes: list[str]
     ) -> dict[str, Any] | None:
-        """Envia ``SEED_REPORT`` com os hashes completos deste peer."""
+        """Envia SEED_REPORT com os hashes completos deste peer."""
         corpo = SeedReport(nome_peer=nome_peer, ip=ip, porta=porta, hashes=hashes)
         return self._post("/peers/seed-report", corpo.model_dump())
 
@@ -116,7 +116,7 @@ class PeerTrackerClient:
         tamanho: int | None = None,
         n_chunks: int | None = None,
     ) -> dict[str, Any] | None:
-        """Envia ``REGISTER_FILE`` (upload original ou re-registro)."""
+        """Envia REGISTER_FILE (upload original ou re-registro)."""
         corpo = RegisterFile(
             nome_peer=nome_peer,
             hash=hash_arquivo,
@@ -127,7 +127,7 @@ class PeerTrackerClient:
         return self._post("/files/register", corpo.model_dump(exclude_none=True))
 
     def search_file(self, query: str, query_id: str) -> SearchResult | None:
-        """Envia ``SEARCH_FILE`` e devolve o ``SEARCH_RESULT`` tipado."""
+        """Envia SEARCH_FILE e devolve o SEARCH_RESULT tipado."""
         corpo = SearchFile(query_id=query_id, query=query, ttl=3)
         resposta = self._post("/search", corpo.model_dump())
         if resposta is None:
@@ -141,62 +141,62 @@ class PeerTrackerClient:
     def peer_leave_file(
         self, nome_peer: str, hash_arquivo: str
     ) -> dict[str, Any] | None:
-        """Envia ``PEER_LEAVE_FILE`` (remoção imediata de uma fonte)."""
+        """Envia PEER_LEAVE_FILE (remoção imediata de uma fonte)."""
         corpo = PeerLeaveFile(nome_peer=nome_peer, hash=hash_arquivo)
         return self._post("/files/leave", corpo.model_dump())
 
     # ------------------------------------------------------------------
-    # Playlists (Fase 6) — dados de usuário, locais ao tracker atual
+    # Playlists — dados de usuário, locais ao tracker atual
     # ------------------------------------------------------------------
 
     def criar_playlist(self, dono: str, nome: str) -> int | None:
-        """``POST /playlists``; devolve o ``playlist_id`` criado."""
+        """POST /playlists; devolve o playlist_id criado."""
         resposta = self._post("/playlists", {"dono": dono, "nome": nome})
         if resposta is None:
             return None
         return int(resposta["playlist_id"])
 
     def listar_playlists(self, dono: str) -> list[dict[str, Any]] | None:
-        """``GET /playlists/{dono}``; devolve a lista de playlists do dono."""
+        """GET /playlists/{dono}; devolve a lista de playlists do dono."""
         resposta = self._get(f"/playlists/{dono}")
         if resposta is None:
             return None
         return list(resposta["playlists"])
 
     def obter_playlist(self, playlist_id: int) -> dict[str, Any] | None:
-        """``GET /playlists/{id}``; devolve ``{nome, dono, itens}`` ou ``None``."""
+        """GET /playlists/{id}; devolve {nome, dono, itens} ou None."""
         return self._get(f"/playlists/{playlist_id}")
 
     def adicionar_item_playlist(
         self, playlist_id: int, hash_arquivo: str
     ) -> dict[str, Any] | None:
-        """``POST /playlists/{id}/items``; a ordem é atribuída pelo tracker."""
+        """POST /playlists/{id}/items; a ordem é atribuída pelo tracker."""
         return self._post(f"/playlists/{playlist_id}/items", {"hash": hash_arquivo})
 
     def remover_item_playlist(
         self, playlist_id: int, hash_arquivo: str
     ) -> dict[str, Any] | None:
-        """``DELETE /playlists/{id}/items/{hash}``."""
+        """DELETE /playlists/{id}/items/{hash}."""
         return self._delete(f"/playlists/{playlist_id}/items/{hash_arquivo}")
 
     def deletar_playlist(self, playlist_id: int) -> dict[str, Any] | None:
-        """``DELETE /playlists/{id}``."""
+        """DELETE /playlists/{id}."""
         return self._delete(f"/playlists/{playlist_id}")
 
     # ------------------------------------------------------------------
-    # Transporte com fallback (§7.5)
+    # Transporte com fallback
     # ------------------------------------------------------------------
 
     def _post(self, rota: str, corpo: dict[str, Any]) -> dict[str, Any] | None:
-        """POST na API do tracker atual (ver :meth:`_request`)."""
+        """POST na API do tracker atual (ver _request)."""
         return self._request("POST", rota, corpo)
 
     def _get(self, rota: str) -> dict[str, Any] | None:
-        """GET na API do tracker atual (ver :meth:`_request`)."""
+        """GET na API do tracker atual (ver _request)."""
         return self._request("GET", rota, None)
 
     def _delete(self, rota: str) -> dict[str, Any] | None:
-        """DELETE na API do tracker atual (ver :meth:`_request`)."""
+        """DELETE na API do tracker atual (ver _request)."""
         return self._request("DELETE", rota, None)
 
     def _request(
@@ -205,7 +205,7 @@ class PeerTrackerClient:
         """Requisita a API do tracker atual, com fallback aos demais em falha de rede.
 
         Returns:
-            Corpo JSON da resposta; ``None`` em erro HTTP (não de conectividade).
+            Corpo JSON da resposta; None em erro HTTP (não de conectividade).
 
         Raises:
             TodosTrackersIndisponiveis: Se todos os trackers da lista falharem
@@ -246,7 +246,7 @@ class PeerTrackerClient:
         ) from ultimo_erro
 
     def _avancar_e_reapresentar(self, rota: str) -> None:
-        """Passa ao próximo tracker e reenvia ``PEER_HELLO`` lá (§7.5)."""
+        """Passa ao próximo tracker e reenvia PEER_HELLO lá."""
         self.current_tracker_index = (self.current_tracker_index + 1) % len(
             self._trackers
         )
@@ -256,7 +256,7 @@ class PeerTrackerClient:
             self._hello_direto()
 
     def _talvez_reassignar(self, dados: object) -> None:
-        """Migra para o tracker de ``reassign_to``, se a resposta trouxer um."""
+        """Migra para o tracker de reassign_to, se a resposta trouxer um."""
         if not isinstance(dados, dict) or self._reassignando:
             return
         alvo = dados.get("reassign_to")
@@ -271,7 +271,7 @@ class PeerTrackerClient:
             self._reassignando = False
 
     def _migrar_para(self, ip: str, api_port: int) -> None:
-        """Aponta o cliente ao tracker ``(ip, api_port)`` e se reapresenta lá."""
+        """Aponta o cliente ao tracker (ip, api_port) e se reapresenta lá."""
         for idx, tracker in enumerate(self._trackers):
             if str(tracker["ip"]) == ip and int(tracker["api_port"]) == api_port:
                 self.current_tracker_index = idx
@@ -286,7 +286,7 @@ class PeerTrackerClient:
             self._hello_direto()
 
     def _hello_direto(self) -> None:
-        """Envia um ``PEER_HELLO`` ao tracker atual, sem fallback nem reassign."""
+        """Envia um PEER_HELLO ao tracker atual, sem fallback nem reassign."""
         assert self._identidade is not None
         nome_peer, ip, porta = self._identidade
         corpo = PeerHello(nome_peer=nome_peer, ip=ip, porta=porta).model_dump()
@@ -312,7 +312,7 @@ class PeerTrackerClient:
         return str(self._trackers[idx].get("tracker_id", self._base_url(idx)))
 
     def _cliente(self, idx: int) -> httpx.Client:
-        """Reusa (ou cria) a sessão HTTP do tracker ``idx``."""
+        """Reusa (ou cria) a sessão HTTP do tracker idx."""
         cliente = self._clientes.get(idx)
         if cliente is None:
             cliente = httpx.Client(base_url=self._base_url(idx), timeout=self.timeout)

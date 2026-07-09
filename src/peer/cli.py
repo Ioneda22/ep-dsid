@@ -1,13 +1,13 @@
-"""CLI interativa do peer — ``input()``/``print()`` puros (§7.2).
+"""CLI interativa do peer — input()/print() puros.
 
-Única camada do sistema autorizada a usar ``print`` (§4.3/§14.6).
-Comandos: ``help``, ``upload``, ``search``, ``download``, ``list``,
-``remove``, ``peers``, ``playlist`` (create/add/remove/show/list/delete),
-``status`` e ``quit`` (§7.2).
+Única camada do sistema autorizada a usar print.
+Comandos: help, upload, search, download, list,
+remove, peers, playlist (create/add/remove/show/list/delete),
+status e quit.
 
-O comando ``download <hash>`` depende de uma busca anterior na mesma
+O comando download <hash> depende de uma busca anterior na mesma
 sessão: é a busca que associa o hash ao nome legível (resolução em dois
-passos do main.tex §"Mecanismo de Resolução de Nomes").
+passos nome->hash).
 """
 
 from __future__ import annotations
@@ -29,7 +29,7 @@ logger = logging.getLogger(__name__)
 
 
 def _parse_id(valor: str) -> int | None:
-    """Converte um id de playlist textual para ``int``; ``None`` se inválido."""
+    """Converte um id de playlist textual para int; None se inválido."""
     try:
         return int(valor)
     except ValueError:
@@ -56,7 +56,7 @@ Comandos disponíveis:
 
 
 class PeerCLI:
-    """Loop de comandos do peer; roda na thread principal (§7.1)."""
+    """Loop de comandos do peer; roda na thread principal."""
 
     def __init__(
         self,
@@ -65,7 +65,7 @@ class PeerCLI:
         tracker_client: PeerTrackerClient,
         downloader: Downloader,
     ) -> None:
-        """Recebe as dependências por parâmetro (§14.4)."""
+        """Recebe as dependências por parâmetro (injeção via construtor)."""
         self.nome_peer = nome_peer
         self.storage = storage
         self.tracker_client = tracker_client
@@ -74,7 +74,7 @@ class PeerCLI:
         self._resultados_busca: dict[str, SearchResultEntry] = {}
 
     def run(self) -> None:
-        """Lê e despacha comandos até ``quit``/EOF/Ctrl+C."""
+        """Lê e despacha comandos até quit/EOF/Ctrl+C."""
         print(f"PeerSpot — peer '{self.nome_peer}'. Digite 'help' para começar.")
         while True:
             try:
@@ -92,7 +92,7 @@ class PeerCLI:
     # ------------------------------------------------------------------
 
     def _despachar(self, linha: str) -> bool:
-        """Executa um comando; ``False`` encerra o loop (``quit``)."""
+        """Executa um comando; False encerra o loop (quit)."""
         comando, _, resto = linha.partition(" ")
         resto = resto.strip()
         try:
@@ -235,7 +235,7 @@ class PeerCLI:
             print(f"  {p.nome_peer}  {p.ip}:{p.porta}")
 
     # ------------------------------------------------------------------
-    # Playlists (Fase 6)
+    # Playlists
     # ------------------------------------------------------------------
 
     def _cmd_playlist(self, resto: str) -> None:

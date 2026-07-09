@@ -1,19 +1,19 @@
-"""Digest de versões periódico entre trackers (main.tex §11.3).
+"""Digest de versões periódico entre trackers.
 
-A detecção inline de lacunas (``SYNC_TABLE`` fora de sequência) tem um ponto
+A detecção inline de lacunas (SYNC_TABLE fora de sequência) tem um ponto
 cego: se a ÚLTIMA escrita de um tracker se perde e ele fica em silêncio, não vem
-um ``seq`` posterior para revelar o buraco. Esta thread fecha essa borda: a cada
-``interval_seconds`` (folgado, 5 min) faz *push* de um ``SYNC_DIGEST`` — apenas o
+um seq posterior para revelar o buraco. Esta thread fecha essa borda: a cada
+interval_seconds (folgado, 5 min) faz push de um SYNC_DIGEST — apenas o
 vetor de versões — a todos os trackers conhecidos. Quem recebe compara componente
-a componente e puxa via ``SYNC_PULL`` o que o emissor tiver a mais. O custo é
+a componente e puxa via SYNC_PULL o que o emissor tiver a mais. O custo é
 O(n_trackers), não O(índice): nada do estado viaja no digest.
 
 O intervalo deve ficar ABAIXO da retenção dos tombstones (600s / 10 min) para
-repor uma remoção perdida antes de o tombstone expirar (main.tex §11.3).
+repor uma remoção perdida antes de o tombstone expirar.
 
-Espelha o padrão de thread do ``TombstoneReaper``: a classe só dá o ritmo; toda a
-lógica de estado vive no ``Index`` (``versoes``) e no ``SyncClient``
-(``propagar_digest``), o que mantém tudo testável sem dormir (§10 do CLAUDE.md).
+Espelha o padrão de thread do TombstoneReaper: a classe só dá o ritmo; toda a
+lógica de estado vive no Index (versoes) e no SyncClient
+(propagar_digest), o que mantém tudo testável sem dormir.
 """
 
 from __future__ import annotations
@@ -26,14 +26,13 @@ from src.tracker.sync_client import SyncClient
 
 logger = logging.getLogger(__name__)
 
-#: Intervalo do digest (main.tex §11.3): 5 min. DEVE ser menor que a retenção
-#: dos tombstones (600s / 10 min) para repor uma remoção perdida antes de o
-#: tombstone expirar.
+#: Intervalo do digest: 5 min. DEVE ser menor que a retenção dos tombstones
+#: (600s / 10 min) para repor uma remoção perdida antes de o tombstone expirar.
 DIGEST_INTERVAL = 300.0
 
 
 class DigestBroadcaster:
-    """Thread daemon que faz *push* periódico de ``SYNC_DIGEST`` (backstop).
+    """Thread daemon que faz push periódico de SYNC_DIGEST (backstop).
 
     Exemplo:
         >>> broadcaster = DigestBroadcaster("tracker-1", index, sync_client)
@@ -51,11 +50,11 @@ class DigestBroadcaster:
     ) -> None:
         """Args:
         tracker_id: Identificador deste tracker (para logs).
-        index: Índice cujo vetor de versões (``versoes``) é anunciado.
-        sync_client: Cliente de flooding (faz o *push* paralelo do digest).
+        index: Índice cujo vetor de versões (versoes) é anunciado.
+        sync_client: Cliente de flooding (faz o push paralelo do digest).
         interval_seconds: Intervalo entre digests. Deve ser menor que
-            ``tombstone_retention_seconds`` para uma remoção perdida ser
-            reposta antes de o tombstone expirar (main.tex §11.3).
+            tombstone_retention_seconds para uma remoção perdida ser
+            reposta antes de o tombstone expirar.
         """
         self.tracker_id = tracker_id
         self.index = index
@@ -80,7 +79,7 @@ class DigestBroadcaster:
             self._thread.join(timeout=5)
 
     def enviar_digest_agora(self) -> None:
-        """Faz um *push* imediato de ``SYNC_DIGEST`` (inicialização e testes §10)."""
+        """Faz um push imediato de SYNC_DIGEST (inicialização e testes)."""
         versoes = self.index.versoes()
         self.sync_client.propagar_digest(versoes)
         logger.debug(

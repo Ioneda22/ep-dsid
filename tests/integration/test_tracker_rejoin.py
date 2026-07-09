@@ -1,14 +1,14 @@
-"""Integração da Fase 5: reintegração de tracker + rebalance (§6.5, main.tex §12.4).
+"""Integração da reintegração de tracker + rebalance.
 
-A reconstrução do índice via ``TRACKER_REJOIN`` → ``TRACKER_LIST`` →
-``SYNC_PULL(desde_seq=0)`` já é coberta em ``test_sync_repair.py``. Aqui o foco é
-o passo NOVO da Fase 5: quando um tracker se reintegra, os trackers ativos cedem
-parte dos seus peers a ele (``REASSIGN_TRACKER``), e o peer cedido migra sozinho
+A reconstrução do índice via TRACKER_REJOIN → TRACKER_LIST →
+SYNC_PULL(desde_seq=0) já é coberta em test_sync_repair.py. Aqui o foco é
+o passo NOVO: quando um tracker se reintegra, os trackers ativos cedem
+parte dos seus peers a ele (REASSIGN_TRACKER), e o peer cedido migra sozinho
 na sua próxima chamada REST.
 
 Cenário: 3 trackers reais (flooding + rebalance). Três peers reportam ao
-tracker-1; o tracker-2 se reintegra; o tracker-1 cede ``floor(3/3)=1`` peer a ele.
-O peer cedido recebe ``reassign_to`` na resposta seguinte e passa a falar com o
+tracker-1; o tracker-2 se reintegra; o tracker-1 cede floor(3/3)=1 peer a ele.
+O peer cedido recebe reassign_to na resposta seguinte e passa a falar com o
 tracker-2.
 """
 
@@ -101,7 +101,7 @@ def test_reintegracao_cede_peers_e_peer_migra(
 def test_rebalance_nao_cede_quando_ha_poucos_peers(
     trackers: dict[str, TrackerNode],
 ) -> None:
-    """floor(meus_peers / N) == 0 não cede ninguém (main.tex §12.4)."""
+    """floor(meus_peers / N) == 0 não cede ninguém."""
     t1, t2 = trackers["tracker-1"], trackers["tracker-2"]
     _hello(t1.api_url, "alice", 7001)  # 1 peer local, N=3 -> floor(1/3)=0
 

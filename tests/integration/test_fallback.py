@@ -1,8 +1,8 @@
-"""Integração da Fase 5: fallback de tracker no peer (§7.5, main.tex §12.2).
+"""Fallback de tracker no peer.
 
 Dois trackers reais (com flooding) + um peer configurado com ambos. O peer
 registra um arquivo no tracker-1; o tracker-1 cai; a próxima operação do peer
-(uma busca) migra automaticamente para o tracker-2 (reenviando ``PEER_HELLO``
+(uma busca) migra automaticamente para o tracker-2 (reenviando PEER_HELLO
 lá) e tem sucesso, pois o índice já foi replicado.
 """
 
@@ -59,7 +59,7 @@ def test_peer_migra_para_backup_quando_tracker_cai(
         assert {e.hash for e in resultado.resultados} == {HASH_A}
         assert client.current_tracker_index == 1  # fallback efetivado
 
-        # O fallback reapresentou alice ao tracker-2 (PEER_HELLO automático, §7.5).
+        # O fallback reapresentou alice ao tracker-2 (PEER_HELLO automático).
         assert "alice" in t2.index.get_snapshot().nome_peer_to_endereco
     finally:
         client.close()

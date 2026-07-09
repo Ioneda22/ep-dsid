@@ -1,7 +1,7 @@
-"""Teste de integração da Fase 6: CRUD de playlists via REST.
+"""Teste de integração do CRUD de playlists via REST.
 
 Sobe o app FastAPI num uvicorn real (thread, porta dinâmica em
-127.0.0.1 — §10) e exercita o ciclo completo de playlists via httpx:
+127.0.0.1) e exercita o ciclo completo de playlists via httpx:
 criar → adicionar 3 hashes → listar → remover um → obter → deletar.
 
 As playlists são dados de usuário LOCAIS ao tracker (não propagadas por

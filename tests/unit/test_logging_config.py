@@ -12,8 +12,8 @@ import pytest
 from src.common.logging_config import setup_logging
 
 
-# fixture prepara limpa o ambiente de teste antes do yield seria a preparação antes
-# do teste rodar depois do yield é limpando o ambiente
+# Fixture autouse: não há preparação antes do yield; só o teardown após cada
+# teste, removendo os handlers do logger raiz para não vazarem entre casos.
 @pytest.fixture(autouse=True)
 def _limpa_logger_raiz() -> Iterator[None]:
     """Remove handlers do logger raiz após cada teste para evitar vazamento."""
@@ -25,6 +25,8 @@ def _limpa_logger_raiz() -> Iterator[None]:
 
 
 def test_setup_logging_cria_arquivo_e_escreve(tmp_path: Path) -> None:
+    """setup_logging cria o arquivo de log (e diretórios intermediários) e a
+    mensagem emitida aparece nele com o nível e o nome do logger."""
     log_path = tmp_path / "subdir" / "peerspot.log"
     setup_logging(log_path, level="DEBUG")
 
@@ -55,5 +57,6 @@ def test_setup_logging_idempotente(tmp_path: Path) -> None:
 
 
 def test_setup_logging_nivel_invalido(tmp_path: Path) -> None:
+    """Um nível de log desconhecido faz setup_logging levantar ValueError."""
     with pytest.raises(ValueError, match="inválido"):
         setup_logging(tmp_path / "x.log", level="VERBOSO")

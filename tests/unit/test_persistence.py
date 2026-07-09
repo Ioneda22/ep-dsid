@@ -1,4 +1,4 @@
-"""Testes unitários da persistência SQLite do tracker (Fase 2)."""
+"""Testes unitários da persistência SQLite do tracker (usuários e playlists)."""
 
 from __future__ import annotations
 

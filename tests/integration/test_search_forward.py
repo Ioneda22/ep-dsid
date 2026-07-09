@@ -1,6 +1,6 @@
-"""Teste de integração da Fase 4: roteamento SEARCH_FORWARD entre trackers.
+"""Teste de integração do roteamento SEARCH_FORWARD entre trackers.
 
-Cluster SEM flooding (``com_flooding=False``): o registro feito no
+Cluster SEM flooding (com_flooding=False): o registro feito no
 tracker-1 NÃO chega aos demais via SYNC_TABLE, forçando o tracker-3 a
 rotear a busca via SEARCH_FORWARD (TTL, timeout de 2s) para respondê-la.
 """

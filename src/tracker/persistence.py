@@ -1,12 +1,12 @@
-"""Persistência durável do tracker em SQLite (§6.1, camada 3).
+"""Persistência durável do tracker em SQLite.
 
 Guarda apenas os dados duráveis: usuários e playlists. O índice de
-arquivos **nunca** é persistido (§11.4) — vive em memória no
-:class:`src.tracker.index.Index`.
+arquivos nunca é persistido — vive em memória no
+src.tracker.index.Index.
 
-O ``sqlite3`` da stdlib não garante serialização entre threads em todas
+O sqlite3 da stdlib não garante serialização entre threads em todas
 as builds, e o uvicorn despacha rotas síncronas num threadpool; por isso
-a conexão é encapsulada em :class:`TrackerDB` com um ``threading.Lock``.
+a conexão é encapsulada em TrackerDB com um threading.Lock.
 """
 
 from __future__ import annotations
@@ -46,8 +46,8 @@ CREATE TABLE IF NOT EXISTS playlist_itens (
 class TrackerDB:
     """Conexão SQLite do tracker, serializada por lock.
 
-    Use :func:`init_db` para construir uma instância já com o schema
-    aplicado. O relógio é injetável para testes determinísticos (§10).
+    Use init_db para construir uma instância já com o schema
+    aplicado. O relógio é injetável para testes determinísticos.
     """
 
     def __init__(
@@ -60,7 +60,7 @@ class TrackerDB:
     def registrar_usuario(self, nome_peer: str) -> None:
         """Insere o usuário se ainda não existir (idempotente).
 
-        Chamado a cada ``PEER_HELLO`` — repetir o hello não duplica linha.
+        Chamado a cada PEER_HELLO — repetir o hello não duplica linha.
         """
         with self._lock:
             self._conn.execute(
@@ -70,7 +70,7 @@ class TrackerDB:
             self._conn.commit()
 
     def listar_usuarios(self) -> list[str]:
-        """Devolve os ``nome_peer`` conhecidos, em ordem alfabética."""
+        """Devolve os nome_peer conhecidos, em ordem alfabética."""
         with self._lock:
             rows = self._conn.execute(
                 "SELECT nome_peer FROM usuarios ORDER BY nome_peer"
@@ -78,25 +78,25 @@ class TrackerDB:
         return [nome for (nome,) in rows]
 
     # ------------------------------------------------------------------
-    # Playlists — dados de usuário, locais ao tracker (Fase 6, §7.2)
+    # Playlists — dados de usuário, locais ao tracker.
     #
     # Não são propagadas entre trackers via SYNC_TABLE: só o índice de
     # arquivos é replicado. Uma playlist só existe no tracker onde foi
-    # criada (limitação aceita, registrada no CHANGELOG).
+    # criada (limitação aceita e conhecida).
     # ------------------------------------------------------------------
 
     def criar_playlist(self, dono: str, nome: str) -> int:
-        """Cria uma playlist e devolve seu ``id`` autoincrementado."""
+        """Cria uma playlist e devolve seu id autoincrementado."""
         with self._lock:
             cur = self._conn.execute(
                 "INSERT INTO playlists (dono, nome, criada_em) VALUES (?, ?, ?)",
                 (dono, nome, self._clock()),
             )
             self._conn.commit()
-            return int(cur.lastrowid)
+            return int(cur.lastrowid)  # type: ignore[arg-type]
 
     def listar_playlists(self, dono: str) -> list[dict[str, Any]]:
-        """Lista as playlists de um dono, em ordem de criação (``id``)."""
+        """Lista as playlists de um dono, em ordem de criação (id)."""
         with self._lock:
             rows = self._conn.execute(
                 "SELECT id, nome FROM playlists WHERE dono = ? ORDER BY id",
@@ -105,7 +105,7 @@ class TrackerDB:
         return [{"id": pid, "nome": nome, "dono": dono} for (pid, nome) in rows]
 
     def proxima_ordem(self, playlist_id: int) -> int:
-        """Devolve a próxima ``ordem`` livre (``MAX+1``), robusta a remoções."""
+        """Devolve a próxima ordem livre (MAX+1), robusta a remoções."""
         with self._lock:
             (maxo,) = self._conn.execute(
                 "SELECT COALESCE(MAX(ordem), -1) FROM playlist_itens "
@@ -115,7 +115,7 @@ class TrackerDB:
         return int(maxo) + 1
 
     def adicionar_item(self, playlist_id: int, hash_arquivo: str, ordem: int) -> None:
-        """Insere um hash na playlist na posição ``ordem`` (única por playlist)."""
+        """Insere um hash na playlist na posição ordem (única por playlist)."""
         with self._lock:
             self._conn.execute(
                 "INSERT INTO playlist_itens (playlist_id, hash, ordem) "
@@ -134,7 +134,7 @@ class TrackerDB:
             self._conn.commit()
 
     def obter_playlist(self, playlist_id: int) -> dict[str, Any] | None:
-        """Devolve ``{nome, dono, itens: [hash, ...]}`` ou ``None`` se não existir."""
+        """Devolve {nome, dono, itens: [hash, ...]} ou None se não existir."""
         with self._lock:
             cabecalho = self._conn.execute(
                 "SELECT dono, nome FROM playlists WHERE id = ?", (playlist_id,)
@@ -167,11 +167,11 @@ def init_db(db_path: Path, clock: Callable[[], float] = time.time) -> TrackerDB:
     """Abre (criando se preciso) o banco SQLite e aplica o schema.
 
     Args:
-        db_path: Caminho do arquivo ``.db``; diretórios pais são criados.
+        db_path: Caminho do arquivo .db; diretórios pais são criados.
         clock: Fonte de tempo injetável para testes.
 
     Returns:
-        Um :class:`TrackerDB` pronto para uso por múltiplas threads.
+        Um TrackerDB pronto para uso por múltiplas threads.
     """
     db_path.parent.mkdir(parents=True, exist_ok=True)
     # check_same_thread=False: o lock interno do TrackerDB serializa o acesso.

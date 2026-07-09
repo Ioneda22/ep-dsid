@@ -1,11 +1,11 @@
-"""Expiração periódica de tombstones (§6.2 do CLAUDE.md).
+"""Expiração periódica de tombstones do índice.
 
-Uma thread dedicada varre ``Index.tombstones`` a cada ``interval_seconds``
+Uma thread dedicada varre Index.tombstones a cada interval_seconds
 (default 60s) e descarta os registros com idade maior que
-``tombstone_retention_seconds`` (default 600s = 10 min, YAML §6.6). A
-varredura em si é :meth:`src.tracker.index.Index.expire_tombstones`, que
+tombstone_retention_seconds (default 600s = 10 min). A
+varredura em si é src.tracker.index.Index.expire_tombstones, que
 roda sob o lock do índice e usa o relógio injetado — esta thread só dá o
-ritmo, o que mantém a lógica testável sem dormir (§10).
+ritmo, o que mantém a lógica testável sem dormir.
 """
 
 from __future__ import annotations

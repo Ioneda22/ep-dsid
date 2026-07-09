@@ -1,4 +1,4 @@
-"""Testes unitários de ``src.peer.chunk_manager`` (Fase 3)."""
+"""Testes unitários de src.peer.chunk_manager."""
 
 from __future__ import annotations
 

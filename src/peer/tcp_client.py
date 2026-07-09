@@ -1,11 +1,11 @@
-"""Cliente TCP do peer: solicita listas de chunks e baixa chunks (§7.4).
+"""Cliente TCP do peer: solicita listas de chunks e baixa chunks.
 
 As conexões peer↔peer são persistentes: a primeira requisição a um
-``(ip, porta)`` abre o socket e as seguintes o reutilizam — vários
-``CHUNK_REQUEST`` trafegam na mesma conexão durante um download. Cada
-conexão tem seu :class:`MessageReader` (buffer entre mensagens).
+(ip, porta) abre o socket e as seguintes o reutilizam — vários
+CHUNK_REQUEST trafegam na mesma conexão durante um download. Cada
+conexão tem seu MessageReader (buffer entre mensagens).
 
-Thread-safe para o pool paralelo da Fase 5 (§7.4): há um lock POR DESTINO,
+Thread-safe para o pool paralelo de download: há um lock POR DESTINO,
 então dois workers que pegam a mesma fonte serializam na única conexão dela
 (um socket TCP não faz request/response concorrente), enquanto fontes DISTINTAS
 baixam em paralelo — que é onde está o ganho do download distribuído. O dict de
@@ -32,7 +32,7 @@ class PeerTCPClient:
 
         Args:
             timeout: Timeout por requisição em segundos
-                (``chunk_request_timeout_seconds`` do YAML, §7.6).
+                (chunk_request_timeout_seconds do YAML).
         """
         self.timeout = timeout
         self._conexoes: dict[tuple[str, int], MessageReader] = {}
@@ -57,10 +57,10 @@ class PeerTCPClient:
     def request_chunk_list(
         self, ip: str, porta: int, hash_arquivo: str
     ) -> list[int] | None:
-        """Pergunta a um peer quais chunks de ``hash_arquivo`` ele possui.
+        """Pergunta a um peer quais chunks de hash_arquivo ele possui.
 
         Returns:
-            Índices disponíveis na fonte, ou ``None`` em erro/timeout.
+            Índices disponíveis na fonte, ou None em erro/timeout.
         """
         pedido = ChunkListRequest(hash=hash_arquivo)
         resposta = self._requisitar(ip, porta, pedido.model_dump())
@@ -78,7 +78,7 @@ class PeerTCPClient:
         """Baixa um chunk de um peer fonte.
 
         Returns:
-            Payload binário do chunk, ou ``None`` em erro/timeout/ERROR.
+            Payload binário do chunk, ou None em erro/timeout/ERROR.
         """
         pedido = ChunkRequest(hash=hash_arquivo, chunk_index=chunk_index)
         resposta = self._requisitar(ip, porta, pedido.model_dump())
@@ -117,7 +117,7 @@ class PeerTCPClient:
     def _requisitar(
         self, ip: str, porta: int, mensagem: dict
     ) -> tuple[dict, bytes | None] | None:
-        """Envia ``mensagem`` na conexão (reusada) e lê uma resposta.
+        """Envia mensagem na conexão (reusada) e lê uma resposta.
 
         O lock por destino garante que só uma requisição está em voo por
         conexão — o request/response ficaria corrompido se dois workers do pool
@@ -138,7 +138,7 @@ class PeerTCPClient:
                 return None
 
     def _lock_destino(self, ip: str, porta: int) -> threading.Lock:
-        """Lock dedicado à conexão com ``(ip, porta)`` (criado sob demanda)."""
+        """Lock dedicado à conexão com (ip, porta) (criado sob demanda)."""
         chave = (ip, porta)
         with self._dict_lock:
             lock = self._locks_por_destino.get(chave)
@@ -148,10 +148,10 @@ class PeerTCPClient:
             return lock
 
     def _obter_conexao(self, ip: str, porta: int) -> MessageReader:
-        """Reusa a conexão com ``(ip, porta)`` ou abre uma nova.
+        """Reusa a conexão com (ip, porta) ou abre uma nova.
 
         Chamado já sob o lock do destino, então não há corrida de abertura
-        para a mesma fonte; o dict só precisa de ``_dict_lock`` para as leituras/
+        para a mesma fonte; o dict só precisa de _dict_lock para as leituras/
         escritas entre destinos diferentes.
         """
         chave = (ip, porta)

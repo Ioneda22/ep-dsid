@@ -78,7 +78,7 @@ def test_validate_campo_com_tipo_errado() -> None:
 
 
 def test_required_fields_cobre_todos_os_tipos() -> None:
-    """Sanity: todos os 21 tipos do Listing 7.2 estão em REQUIRED_FIELDS."""
+    """Sanity: todos os 21 tipos de mensagem do protocolo estão em REQUIRED_FIELDS."""
     esperados = {
         "PEER_HELLO",
         "PEER_LEAVE",
@@ -107,7 +107,7 @@ def test_required_fields_cobre_todos_os_tipos() -> None:
 
 
 def test_modelos_sao_pydantic_com_type_default() -> None:
-    """Cada modelo é BaseModel e serializa o campo ``type`` correto."""
+    """Cada modelo é BaseModel e serializa o campo type correto."""
     for tipo, modelo in MESSAGE_MODELS.items():
         assert issubclass(modelo, BaseModel)
         assert modelo.model_fields["type"].default == tipo
