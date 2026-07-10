@@ -19,9 +19,16 @@ from typing import Any
 from fastapi import FastAPI, Request
 from fastapi.exceptions import RequestValidationError
 from fastapi.responses import JSONResponse
+from pydantic import BaseModel
 
 from src.common import errors
-from src.common.errors import PeerSpotError, build_error_message
+from src.common.errors import (
+    InvalidHashError,
+    NotFoundError,
+    PeerSpotError,
+    build_error_message,
+)
+from src.common.hashing import is_valid_sha256
 from src.common.messages import (
     PeerHello,
     PeerLeave,
@@ -62,6 +69,19 @@ _REF_TYPE_POR_ROTA: dict[str, str] = {
     "/files/leave": "PEER_LEAVE_FILE",
     "/search": "SEARCH_FILE",
 }
+
+
+class CriarPlaylistBody(BaseModel):
+    """Corpo de POST /playlists — playlists são dados de usuário."""
+
+    dono: str
+    nome: str
+
+
+class AdicionarItemBody(BaseModel):
+    """Corpo de POST /playlists/{id}/items."""
+
+    hash: str
 
 
 def create_app(
@@ -151,6 +171,57 @@ def create_app(
     @app.post("/search")
     def search(body: SearchFile) -> SearchResult:
         return handlers.handle_search_file(body, index, search_router)
+
+    # ------------------------------------------------------------------
+    # Playlists — CRUD local ao tracker, NÃO propagado por sync.
+    # Rotas de id usam o convertor :int para não colidirem com
+    # GET /playlists/{dono} (regex [0-9]+ vs. nome de peer).
+    # ------------------------------------------------------------------
+
+    @app.post("/playlists")
+    def criar_playlist(body: CriarPlaylistBody) -> dict[str, Any]:
+        playlist_id = db.criar_playlist(body.dono, body.nome)
+        logger.info("PLAYLIST criada: id=%d dono=%s", playlist_id, body.dono)
+        return {"playlist_id": playlist_id}
+
+    @app.get("/playlists/{playlist_id:int}")
+    def obter_playlist(playlist_id: int) -> dict[str, Any]:
+        playlist = db.obter_playlist(playlist_id)
+        if playlist is None:
+            raise NotFoundError(f"playlist {playlist_id} não existe")
+        return playlist
+
+    @app.get("/playlists/{dono}")
+    def listar_playlists(dono: str) -> dict[str, Any]:
+        return {"playlists": db.listar_playlists(dono)}
+
+    @app.post("/playlists/{playlist_id:int}/items")
+    def adicionar_item(playlist_id: int, body: AdicionarItemBody) -> dict[str, Any]:
+        if not is_valid_sha256(body.hash):
+            raise InvalidHashError(
+                f"hash inválido: {body.hash!r}; esperado sha256 (64 hex minúsculos)"
+            )
+        if db.obter_playlist(playlist_id) is None:
+            raise NotFoundError(f"playlist {playlist_id} não existe")
+        if not index.conhece_hash(body.hash):
+            raise NotFoundError(
+                f"hash {body.hash!r} não está no índice; registre o arquivo antes "
+                "(faça upload ou download) de adicioná-lo a uma playlist"
+            )
+        db.adicionar_item(playlist_id, body.hash, db.proxima_ordem(playlist_id))
+        return {"status": "ok"}
+
+    @app.delete("/playlists/{playlist_id:int}/items/{hash_arquivo}")
+    def remover_item(playlist_id: int, hash_arquivo: str) -> dict[str, Any]:
+        if db.obter_playlist(playlist_id) is None:
+            raise NotFoundError(f"playlist {playlist_id} não existe")
+        db.remover_item(playlist_id, hash_arquivo)
+        return {"status": "ok"}
+
+    @app.delete("/playlists/{playlist_id:int}")
+    def deletar_playlist(playlist_id: int) -> dict[str, Any]:
+        db.deletar_playlist(playlist_id)
+        return {"status": "ok"}
 
     @app.get("/trackers")
     def trackers() -> dict[str, list[dict[str, Any]]]:

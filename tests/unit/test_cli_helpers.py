@@ -11,7 +11,6 @@ from pathlib import Path
 from src.common.messages import SearchResultEntry, SearchResultPeer
 from src.peer.cli import PeerCLI
 from src.peer.name_registry import NameRegistry
-from src.peer.playlist_store import PlaylistStore
 
 HASH_A = "a" * 64
 HASH_B = "b" * 64
@@ -47,7 +46,6 @@ def _cli(tmp_path: Path, locais: list[str] | None = None) -> PeerCLI:
         tracker_client=object(),  # type: ignore[arg-type]
         downloader=_FakeDownloader(),  # type: ignore[arg-type]
         name_registry=NameRegistry(tmp_path),
-        playlist_store=PlaylistStore(tmp_path),
     )
 
 

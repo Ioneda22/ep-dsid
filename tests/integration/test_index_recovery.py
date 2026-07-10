@@ -26,7 +26,6 @@ from src.peer.chunk_manager import ChunkManager
 from src.peer.cli import PeerCLI
 from src.peer.downloader import Downloader
 from src.peer.name_registry import NameRegistry
-from src.peer.playlist_store import PlaylistStore
 from src.peer.storage import Storage
 from src.peer.tcp_client import PeerTCPClient
 from src.peer.tracker_client import PeerTrackerClient
@@ -78,9 +77,7 @@ def _peer_cli(tmp_path: Path, porta: int) -> tuple[PeerCLI, Storage, PeerTracker
         storage=storage,
         chunk_manager=ChunkManager(),
     )
-    cli = PeerCLI(
-        "alice", storage, client, downloader, registry, PlaylistStore(tmp_path / "peer")
-    )
+    cli = PeerCLI("alice", storage, client, downloader, registry)
     return cli, storage, client
 
 

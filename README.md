@@ -171,7 +171,7 @@ download <nome | nº | hash>   baixa um arquivo (faça 'search' antes)
 list / ls                     lista arquivos completos neste peer
 remove <nome | hash>          remove arquivo local e notifica o tracker
 peers <nome | nº | hash>      fontes de um arquivo (faça 'search' antes)
-playlist create <nome>        cria uma playlist (local ao peer, funciona offline)
+playlist create <nome>        cria uma playlist
 playlist add <id> <hash>      adiciona um hash à playlist
 playlist remove <id> <hash>   remove um hash da playlist
 playlist show <id>            mostra o conteúdo de uma playlist
@@ -313,10 +313,12 @@ Eles são recriados automaticamente na próxima execução.
 
 ## 9. Limitações conhecidas
 
-- **Playlists são locais ao peer** (persistidas em `<storage_dir>/playlists.json`),
-  não estado do tracker. Ficam disponíveis mesmo sem nenhum tracker no ar (como o
-  `list` de músicas) e sobrevivem a quedas/reinícios de trackers; em contrapartida,
-  não são compartilhadas entre peers.
+- **Playlists não são replicadas entre trackers.** São dados de usuário (SQLite
+  durável no tracker), locais ao tracker onde foram criadas — apenas o índice de
+  arquivos (`nome→hash`, `hash→peers`) é _full-replicated_. Uma playlist criada no
+  `tracker-1` não é visível no `tracker-2`, e não acompanha o peer em caso de
+  _fallback_ ou _reassign_; se todos os trackers caírem e um **diferente** voltar, a
+  playlist não aparece (o mesmo tracker a preserva via SQLite).
 - **Lista de trackers do peer é estática** (definida no YAML). A adição dinâmica de
   trackers à lista de fallback do peer não é suportada; a limitação está registrada na
   especificação (`main.tex`, §"Sobre a lista TRACKERS no peer").

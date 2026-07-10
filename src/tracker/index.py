@@ -424,6 +424,16 @@ class Index:
                 )
             return resultados
 
+    def conhece_hash(self, hash_arquivo: str) -> bool:
+        """Indica se o hash tem metadados no índice (arquivo registrado na rede).
+
+        Usado para validar itens de playlist: só se pode adicionar à playlist um
+        hash de um arquivo que o tracker conhece (metadados são replicados via
+        SYNC_TABLE), não uma string arbitrária.
+        """
+        with self._lock:
+            return hash_arquivo in self.hash_to_metadata
+
     def get_peers_for_hash(self, hash_arquivo: str) -> list[SearchResultPeer]:
         """Lista as fontes ativas de um hash (comando peers <hash> da CLI).
 

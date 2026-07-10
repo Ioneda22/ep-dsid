@@ -178,12 +178,58 @@ class PeerTrackerClient:
         return self._post("/files/leave", corpo.model_dump())
 
     # ------------------------------------------------------------------
+    # Playlists — dados de usuário, locais ao tracker atual
+    # ------------------------------------------------------------------
+
+    def criar_playlist(self, dono: str, nome: str) -> int | None:
+        """POST /playlists; devolve o playlist_id criado."""
+        resposta = self._post("/playlists", {"dono": dono, "nome": nome})
+        if resposta is None:
+            return None
+        return int(resposta["playlist_id"])
+
+    def listar_playlists(self, dono: str) -> list[dict[str, Any]] | None:
+        """GET /playlists/{dono}; devolve a lista de playlists do dono."""
+        resposta = self._get(f"/playlists/{dono}")
+        if resposta is None:
+            return None
+        return list(resposta["playlists"])
+
+    def obter_playlist(self, playlist_id: int) -> dict[str, Any] | None:
+        """GET /playlists/{id}; devolve {nome, dono, itens} ou None."""
+        return self._get(f"/playlists/{playlist_id}")
+
+    def adicionar_item_playlist(
+        self, playlist_id: int, hash_arquivo: str
+    ) -> dict[str, Any] | None:
+        """POST /playlists/{id}/items; a ordem é atribuída pelo tracker."""
+        return self._post(f"/playlists/{playlist_id}/items", {"hash": hash_arquivo})
+
+    def remover_item_playlist(
+        self, playlist_id: int, hash_arquivo: str
+    ) -> dict[str, Any] | None:
+        """DELETE /playlists/{id}/items/{hash}."""
+        return self._delete(f"/playlists/{playlist_id}/items/{hash_arquivo}")
+
+    def deletar_playlist(self, playlist_id: int) -> dict[str, Any] | None:
+        """DELETE /playlists/{id}."""
+        return self._delete(f"/playlists/{playlist_id}")
+
+    # ------------------------------------------------------------------
     # Transporte com fallback
     # ------------------------------------------------------------------
 
     def _post(self, rota: str, corpo: dict[str, Any]) -> dict[str, Any] | None:
         """POST na API do tracker atual (ver _request)."""
         return self._request("POST", rota, corpo)
+
+    def _get(self, rota: str) -> dict[str, Any] | None:
+        """GET na API do tracker atual (ver _request)."""
+        return self._request("GET", rota, None)
+
+    def _delete(self, rota: str) -> dict[str, Any] | None:
+        """DELETE na API do tracker atual (ver _request)."""
+        return self._request("DELETE", rota, None)
 
     def _request(
         self, metodo: str, rota: str, corpo: dict[str, Any] | None

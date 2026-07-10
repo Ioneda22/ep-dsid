@@ -19,7 +19,6 @@ from src.peer.chunk_manager import ChunkManager
 from src.peer.cli import PeerCLI
 from src.peer.downloader import Downloader
 from src.peer.name_registry import NameRegistry
-from src.peer.playlist_store import PlaylistStore
 from src.peer.seed_reporter import SeedReporter
 from src.peer.storage import Storage
 from src.peer.tcp_client import PeerTCPClient
@@ -96,14 +95,8 @@ def _montar_peer(
         download_pool_size=settings.download_pool_size,
     )
     name_registry = NameRegistry(settings.storage_dir)
-    playlist_store = PlaylistStore(settings.storage_dir)
     cli = PeerCLI(
-        settings.nome_peer,
-        storage,
-        tracker_client,
-        downloader,
-        name_registry,
-        playlist_store,
+        settings.nome_peer, storage, tracker_client, downloader, name_registry
     )
     server = PeerTCPServer(settings.ip, settings.porta, storage)
     reporter = SeedReporter(

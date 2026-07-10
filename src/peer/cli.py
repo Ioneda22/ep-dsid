@@ -25,7 +25,6 @@ import uuid
 from pathlib import Path
 from typing import TYPE_CHECKING
 
-from src.common.hashing import is_valid_sha256
 from src.peer import console
 from src.peer.tracker_client import TodosTrackersIndisponiveis
 
@@ -38,7 +37,6 @@ if TYPE_CHECKING:
     from src.common.messages import SearchResult, SearchResultEntry
     from src.peer.downloader import Downloader
     from src.peer.name_registry import NameRegistry
-    from src.peer.playlist_store import PlaylistStore
     from src.peer.storage import Storage
     from src.peer.tracker_client import PeerTrackerClient
 
@@ -99,7 +97,6 @@ class PeerCLI:
         tracker_client: PeerTrackerClient,
         downloader: Downloader,
         name_registry: NameRegistry,
-        playlist_store: PlaylistStore,
     ) -> None:
         """Recebe as dependências por parâmetro (injeção via construtor)."""
         self.nome_peer = nome_peer
@@ -107,7 +104,6 @@ class PeerCLI:
         self.tracker_client = tracker_client
         self.downloader = downloader
         self.name_registry = name_registry
-        self.playlists = playlist_store
         #: Entradas da última busca, na ordem exibida (para nome/nº → hash).
         self._ultima_busca: list[SearchResultEntry] = []
         self._ultimo_termo = ""
@@ -461,7 +457,10 @@ class PeerCLI:
         if not nome:
             print("Uso: playlist create <nome>")
             return
-        playlist_id = self.playlists.criar(nome)
+        playlist_id = self.tracker_client.criar_playlist(self.nome_peer, nome)
+        if playlist_id is None:
+            print(console.erro("Falha ao criar playlist (veja o log)."))
+            return
         print(console.ok(f"Playlist '{nome}' criada com id {playlist_id}."))
 
     def _playlist_item(self, args: str, *, remover: bool) -> None:
@@ -472,31 +471,41 @@ class PeerCLI:
         if playlist_id is None or not hash_arquivo:
             print(f"Uso: playlist {acao} <id> <hash>")
             return
-        if not remover and not is_valid_sha256(hash_arquivo):
-            print(console.erro(f"Hash inválido: {hash_arquivo!r} (esperado 64 hex)."))
-            return
         if remover:
-            ok = self.playlists.remover_item(playlist_id, hash_arquivo)
-            acao_ok = "Item removido"
+            resposta = self.tracker_client.remover_item_playlist(
+                playlist_id, hash_arquivo
+            )
+            sucesso = "Item removido" if resposta else None
         else:
-            ok = self.playlists.adicionar_item(playlist_id, hash_arquivo)
-            acao_ok = "Item adicionado"
-        if not ok:
-            print(console.aviso(f"Playlist {playlist_id} não existe."))
+            resposta = self.tracker_client.adicionar_item_playlist(
+                playlist_id, hash_arquivo
+            )
+            sucesso = "Item adicionado" if resposta else None
+        if sucesso is None:
+            print(
+                console.erro(
+                    "Operação falhou — verifique se a playlist existe e se o hash "
+                    "é de um arquivo conhecido na rede (veja o log)."
+                )
+            )
             return
-        print(console.ok(f"{acao_ok} na playlist {playlist_id}."))
+        print(console.ok(f"{sucesso} na playlist {playlist_id}."))
 
     def _playlist_show(self, id_str: str) -> None:
         playlist_id = _parse_id(id_str)
         if playlist_id is None:
             print("Uso: playlist show <id>")
             return
-        playlist = self.playlists.obter(playlist_id)
+        playlist = self.tracker_client.obter_playlist(playlist_id)
         if playlist is None:
             print(console.aviso(f"Playlist {playlist_id} não encontrada."))
             return
-        print(console.titulo(f"Playlist {playlist_id}: '{playlist['nome']}'"))
-        itens: list[str] = playlist["itens"]  # type: ignore[assignment]
+        print(
+            console.titulo(
+                f"Playlist {playlist_id}: '{playlist['nome']}' (dono: {playlist['dono']})"
+            )
+        )
+        itens = playlist["itens"]
         if not itens:
             print("  (vazia)")
             return
@@ -506,7 +515,10 @@ class PeerCLI:
             print(f"  {i}. {rotulo}")
 
     def _playlist_list(self) -> None:
-        playlists = self.playlists.listar()
+        playlists = self.tracker_client.listar_playlists(self.nome_peer)
+        if playlists is None:
+            print(console.erro("Falha ao listar playlists (veja o log)."))
+            return
         if not playlists:
             print("Você não tem playlists.")
             return
@@ -519,8 +531,8 @@ class PeerCLI:
         if playlist_id is None:
             print("Uso: playlist delete <id>")
             return
-        if not self.playlists.deletar(playlist_id):
-            print(console.aviso(f"Playlist {playlist_id} não existe."))
+        if self.tracker_client.deletar_playlist(playlist_id) is None:
+            print(console.erro("Falha ao deletar playlist (veja o log)."))
             return
         print(console.ok(f"Playlist {playlist_id} deletada."))
 

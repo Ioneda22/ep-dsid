@@ -62,29 +62,20 @@ inalterados. A única mudança fora da CLI é um callback opcional de progresso 
   corrompido) e `tests/unit/test_cli_helpers.py` (`_formatar_tamanho` e a resolução
   nome/nº/hash da busca e local, com fakes nomeados). Suíte completa: **194 testes**.
 
-### Alterado (mudança de design a pedido do usuário)
-- **Playlists agora são estado LOCAL do peer, não do tracker.** Antes viviam no SQLite
-  do tracker (`data/tracker-N/peerspot.db`) e sumiam da visão do peer quando os
-  trackers caíam ou após um fallback/reassign. Agora ficam em
-  `<storage_dir>/playlists.json` (espelhando o `NameRegistry`), então `playlist
-  list/show/...` funcionam **mesmo sem nenhum tracker no ar** — como o `list` de
-  músicas — e sobrevivem a quedas/reinícios de trackers. Divergência consciente do
-  `main.tex`/`CLAUDE.md` §6.1 (que modelava playlists como dado do tracker), decidida
-  com o usuário; some junto a limitação "playlists não são replicadas entre trackers".
-  - `src/peer/playlist_store.py` (novo) — `PlaylistStore`: CRUD em JSON local, ids
-    inteiros monotônicos (sem reuso), sem duplicar itens; JSON corrompido reinicia
-    vazio (logado). Injetado na `PeerCLI` por `src/peer/main.py`.
-  - `src/peer/cli.py` — comandos de playlist reescritos sobre o store local; `playlist
-    add` valida o formato do hash localmente (`is_valid_sha256`) — mantém a correção
-    do bug "aceitava qualquer coisa" sem depender do tracker.
-  - **Removida a máquina de playlists do tracker** (código que ficaria morto): rotas
-    REST `/playlists*` e os corpos `CriarPlaylistBody`/`AdicionarItemBody`
-    (`src/tracker/api.py`), os métodos de playlist e as tabelas `playlists`/
-    `playlist_itens` do SQLite (`src/tracker/persistence.py` — resta só `usuarios`),
-    os métodos de playlist do `PeerTrackerClient` (e os helpers `_get`/`_delete` que só
-    eles usavam) e o `Index.conhece_hash`. Testes: novo `tests/unit/test_playlist_store.py`
-    (inclui persistência entre instâncias); removido `tests/integration/test_playlists.py`
-    e os testes de playlist de `tests/unit/test_persistence.py`.
+### Sobre playlists (mantidas no tracker, conforme o `main.tex` §2)
+- Uma mudança que movia as playlists para o peer (estado local em JSON, disponível sem
+  tracker) foi implementada e depois **revertida a pedido do usuário**, para respeitar a
+  documentação entregue, que modela playlists como dado durável do tracker. O
+  gerenciamento no tracker (persistência SQLite, rotas REST, métodos do
+  `PeerTrackerClient`, `Index.conhece_hash`) está como antes; a CLI opera as playlists
+  via o tracker atual. O `PlaylistStore` local foi removido.
+- **Limitação conhecida mantida:** playlists NÃO são replicadas entre trackers (só o
+  índice de arquivos é). Uma playlist existe apenas no tracker onde foi criada, então
+  some da visão do peer se ele sofrer fallback/reassign para outro tracker, ou se todos
+  os trackers caírem e um **diferente** voltar (o mesmo tracker, com seu SQLite, a
+  preserva). Corrigir isso robustamente exigiria replicar playlists por uma nova
+  mensagem tracker→tracker, o que estende além do catálogo do Listing 7.2 do `main.tex`
+  — fora do escopo autorizado, portanto não implementado.
 
 ### Corrigido
 - **Busca não encontrava um arquivo local após TODOS os trackers caírem e um voltar
@@ -105,13 +96,15 @@ inalterados. A única mudança fora da CLI é um callback opcional de progresso 
   - Teste: `tests/integration/test_index_recovery.py` (tracker real, upload, índice
     zerado simulando o restart, busca recupera via re-registro; e busca vazia legítima
     sem arquivos locais não re-registra nada).
-- **Playlist aceitava qualquer string como item** (ex.: `banana` virava item). Agora
-  `playlist add` valida o formato do hash (SHA-256, 64 hex minúsculos) antes de
-  adicionar; entrada malformada é rejeitada com mensagem clara. Com as playlists agora
-  locais ao peer (ver acima), a validação vive na CLI (`src/peer/cli.py`) via o novo
-  `is_valid_sha256` (`src/common/hashing.py`), sem depender do tracker.
-  - Testes: `tests/unit/test_playlist_store.py` (operações e persistência) e
-    `tests/unit/test_hashing.py` (`is_valid_sha256`).
+- **Playlist aceitava qualquer string como item** (ex.: `banana` virava item). Agora a
+  rota `POST /playlists/{id}/items` valida o hash: formato SHA-256 (64 hex minúsculos →
+  `INVALID_HASH`/HTTP 400) e existência no índice do tracker (arquivo conhecido na rede
+  → senão `NOT_FOUND`/HTTP 404).
+  - `src/common/hashing.py` — `is_valid_sha256(valor)` (só valida o formato).
+  - `src/tracker/index.py` — `Index.conhece_hash(hash)` (metadados presentes no índice).
+  - `src/tracker/api.py` — validação na rota `adicionar_item`.
+  - Testes: `tests/integration/test_playlists.py` (malformado → 400; formato válido mas
+    desconhecido → 404) e `tests/unit/test_hashing.py` (`is_valid_sha256`).
 
 ### Alterado
 - `PeerCLI.__init__` recebe um `NameRegistry` por parâmetro (injeção via construtor,
