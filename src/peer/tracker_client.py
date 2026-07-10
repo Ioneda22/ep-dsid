@@ -76,6 +76,25 @@ class PeerTrackerClient:
         """Ids (ou URLs) de todos os trackers da lista de fallback (usado no status)."""
         return [self._id(i) for i in range(len(self._trackers))]
 
+    @property
+    def tracker_endereco(self) -> str:
+        """Endereço ip:api_port do tracker atualmente em uso (usado no status)."""
+        atual = self._trackers[self.current_tracker_index]
+        return f"{atual['ip']}:{atual['api_port']}"
+
+    def health(self) -> bool:
+        """GET /health no tracker ATUAL (sem fallback); True se responder ok.
+
+        Usado pelo comando status para mostrar ✓/✗ do tracker corrente; não
+        deve migrar de tracker só por checar saúde, então ignora o fallback.
+        """
+        try:
+            resposta = self._cliente(self.current_tracker_index).get("/health")
+            resposta.raise_for_status()
+            return True
+        except httpx.HTTPError:
+            return False
+
     def close(self) -> None:
         """Encerra todas as sessões HTTP abertas."""
         for cliente in self._clientes.values():
@@ -91,6 +110,19 @@ class PeerTrackerClient:
         self._identidade = (nome_peer, ip, porta)
         corpo = PeerHello(nome_peer=nome_peer, ip=ip, porta=porta)
         return self._post("/peers/hello", corpo.model_dump())
+
+    def reenviar_hello(self) -> bool:
+        """Reapresenta o peer (PEER_HELLO) usando a identidade já guardada.
+
+        Usado na recuperação de um tracker que perdeu o estado: ele também
+        esqueceu a presença do peer, então um REGISTER_FILE falharia com
+        PEER_UNKNOWN — um hello prévio restabelece a presença. No-op (False) se
+        o peer ainda não fez o primeiro hello.
+        """
+        if self._identidade is None:
+            return False
+        nome_peer, ip, porta = self._identidade
+        return self.peer_hello(nome_peer, ip, porta) is not None
 
     def peer_leave(self, nome_peer: str) -> dict[str, Any] | None:
         """Envia PEER_LEAVE (saída ordenada)."""
@@ -146,58 +178,12 @@ class PeerTrackerClient:
         return self._post("/files/leave", corpo.model_dump())
 
     # ------------------------------------------------------------------
-    # Playlists — dados de usuário, locais ao tracker atual
-    # ------------------------------------------------------------------
-
-    def criar_playlist(self, dono: str, nome: str) -> int | None:
-        """POST /playlists; devolve o playlist_id criado."""
-        resposta = self._post("/playlists", {"dono": dono, "nome": nome})
-        if resposta is None:
-            return None
-        return int(resposta["playlist_id"])
-
-    def listar_playlists(self, dono: str) -> list[dict[str, Any]] | None:
-        """GET /playlists/{dono}; devolve a lista de playlists do dono."""
-        resposta = self._get(f"/playlists/{dono}")
-        if resposta is None:
-            return None
-        return list(resposta["playlists"])
-
-    def obter_playlist(self, playlist_id: int) -> dict[str, Any] | None:
-        """GET /playlists/{id}; devolve {nome, dono, itens} ou None."""
-        return self._get(f"/playlists/{playlist_id}")
-
-    def adicionar_item_playlist(
-        self, playlist_id: int, hash_arquivo: str
-    ) -> dict[str, Any] | None:
-        """POST /playlists/{id}/items; a ordem é atribuída pelo tracker."""
-        return self._post(f"/playlists/{playlist_id}/items", {"hash": hash_arquivo})
-
-    def remover_item_playlist(
-        self, playlist_id: int, hash_arquivo: str
-    ) -> dict[str, Any] | None:
-        """DELETE /playlists/{id}/items/{hash}."""
-        return self._delete(f"/playlists/{playlist_id}/items/{hash_arquivo}")
-
-    def deletar_playlist(self, playlist_id: int) -> dict[str, Any] | None:
-        """DELETE /playlists/{id}."""
-        return self._delete(f"/playlists/{playlist_id}")
-
-    # ------------------------------------------------------------------
     # Transporte com fallback
     # ------------------------------------------------------------------
 
     def _post(self, rota: str, corpo: dict[str, Any]) -> dict[str, Any] | None:
         """POST na API do tracker atual (ver _request)."""
         return self._request("POST", rota, corpo)
-
-    def _get(self, rota: str) -> dict[str, Any] | None:
-        """GET na API do tracker atual (ver _request)."""
-        return self._request("GET", rota, None)
-
-    def _delete(self, rota: str) -> dict[str, Any] | None:
-        """DELETE na API do tracker atual (ver _request)."""
-        return self._request("DELETE", rota, None)
 
     def _request(
         self, metodo: str, rota: str, corpo: dict[str, Any] | None

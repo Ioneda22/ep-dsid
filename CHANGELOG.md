@@ -5,6 +5,120 @@ Todas as mudanças notáveis do projeto PeerSpot são documentadas neste arquivo
 O formato é baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/)
 e o projeto segue [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
+## [Não lançado] — Melhorias de experiência na CLI do peer
+
+Melhorias na única superfície voltada ao usuário (a CLI do peer, §4.3). **Nada
+toca o protocolo, o índice ou a sincronização entre trackers** — as 21 mensagens,
+o LWW, o `seq`/`SYNC_PULL` e os critérios de aceitação (§12) permanecem
+inalterados. A única mudança fora da CLI é um callback opcional de progresso no
+`Downloader` (não trafega em rede).
+
+### Adicionado
+- **Operação por NOME legível em vez do hash SHA-256** (pedido do usuário): os
+  comandos `download`, `remove` e `peers` passam a aceitar o **nome da música**, o
+  **nº** exibido na última busca, **ou** o hash — antes exigiam colar os 64 hex.
+  A resolução nome→hash das operações de rede continua vindo de um `search` anterior
+  na mesma sessão (resolução em dois passos da especificação); para arquivos locais
+  (`list`/`remove`), o nome vem do novo `NameRegistry`. Nomes ambíguos (mesmo nome,
+  hashes distintos) são listados e pedem desambiguação por nº/hash.
+  - `src/peer/name_registry.py` (novo) — `NameRegistry`: mapa `hash→nome` persistido
+    em `<storage_dir>/nomes.json`, populado no `upload` e ao concluir um `download`,
+    sobrevivendo a reinícios do peer. É estado local de conveniência — **não** entra
+    no índice distribuído nem no protocolo (o tracker segue sendo a autoridade
+    nome→hash na busca). `registrar`/`esquecer`/`nome`/`hashes_por_nome`
+    (case-insensitive); JSON corrompido reinicia vazio (logado).
+  - `src/peer/cli.py` — resolução `_resolver_busca` (nome/nº/hash da última busca) e
+    `_resolver_local` (nome/hash entre os arquivos completos locais); `_cmd_download`,
+    `_cmd_remove` e `_cmd_peers` reescritos sobre elas.
+- **Barra de progresso no `download`** (item 4 da proposta): callback opcional
+  `on_progress(recebidos, total)` em `Downloader.download_file`, invocado a cada chunk
+  gravado (inclui os já em disco na retomada). A CLI desenha uma barra in-place
+  `[####----] 12/20 (60%)`, serializada por um `threading.Lock` porque o callback vem
+  das threads do pool de download. `download_file`/`_baixar_paralelo`/`_baixar_chunk`
+  ganharam o parâmetro opcional (retrocompatível: chamadas existentes seguem válidas).
+- **`list` e `status` com nome e tamanho legível** (item 2): antes mostravam só o
+  hash cru e bytes; agora exibem `<nome>  5.0 MB` (via `NameRegistry` +
+  `_formatar_tamanho`, função pura B/KB/MB/GB/TB), com o hash em esmaecido abaixo.
+- **`status` mostra saúde do tracker atual** (primeira parte do item 8):
+  `Tracker atual: tracker-1 (127.0.0.1:8001) [online]` (marcadores ASCII, coloridos, para
+  não quebrar o print em consoles cp1252 do Windows). Novos `PeerTrackerClient.health()`
+  (GET `/health` no tracker corrente, **sem** fallback — checar saúde não deve migrar
+  de tracker) e a property `tracker_endereco`.
+- **Aliases e histórico de linha** (item 5): `?`/`h`→help, `q`/`exit`→quit, `ls`/`l`→list,
+  `s`→search, `dl`/`get`→download, `rm`→remove, `st`→status. `import readline` guardado
+  por `try/except ImportError` habilita histórico/edição (setas ↑/↓) onde a stdlib o
+  oferece (Linux/macOS/Git Bash); em Windows nativo degrada para input puro sem quebrar.
+- **`search` sem argumento repete a última busca** (item 7): reexibe os resultados
+  em cache (com os nºs) sem refazer a consulta — útil para reler antes de um `download`.
+- **Comando `clear` / `cls`**: limpa a tela do terminal (comando nativo do SO
+  cls/clear; no-op quando a saída não é um terminal).
+- **Saída colorida com parcimônia**: `src/peer/console.py` (novo) — cores ANSI da
+  stdlib (sem dependência nova), com wrappers `titulo/ok/aviso/erro/dim/destaque/prompt`.
+  Desliga sozinha fora de um terminal (`sys.stdout.isatty()` falso, ex. pytest e
+  redirecionamento) ou com `NO_COLOR`; em Windows habilita o processamento VT do
+  console via `ctypes` (degradação silenciosa se indisponível).
+- Testes (2 arquivos novos, +16): `tests/unit/test_name_registry.py` (roundtrip,
+  persistência entre instâncias, `esquecer`, `hashes_por_nome` case-insensitive, JSON
+  corrompido) e `tests/unit/test_cli_helpers.py` (`_formatar_tamanho` e a resolução
+  nome/nº/hash da busca e local, com fakes nomeados). Suíte completa: **194 testes**.
+
+### Alterado (mudança de design a pedido do usuário)
+- **Playlists agora são estado LOCAL do peer, não do tracker.** Antes viviam no SQLite
+  do tracker (`data/tracker-N/peerspot.db`) e sumiam da visão do peer quando os
+  trackers caíam ou após um fallback/reassign. Agora ficam em
+  `<storage_dir>/playlists.json` (espelhando o `NameRegistry`), então `playlist
+  list/show/...` funcionam **mesmo sem nenhum tracker no ar** — como o `list` de
+  músicas — e sobrevivem a quedas/reinícios de trackers. Divergência consciente do
+  `main.tex`/`CLAUDE.md` §6.1 (que modelava playlists como dado do tracker), decidida
+  com o usuário; some junto a limitação "playlists não são replicadas entre trackers".
+  - `src/peer/playlist_store.py` (novo) — `PlaylistStore`: CRUD em JSON local, ids
+    inteiros monotônicos (sem reuso), sem duplicar itens; JSON corrompido reinicia
+    vazio (logado). Injetado na `PeerCLI` por `src/peer/main.py`.
+  - `src/peer/cli.py` — comandos de playlist reescritos sobre o store local; `playlist
+    add` valida o formato do hash localmente (`is_valid_sha256`) — mantém a correção
+    do bug "aceitava qualquer coisa" sem depender do tracker.
+  - **Removida a máquina de playlists do tracker** (código que ficaria morto): rotas
+    REST `/playlists*` e os corpos `CriarPlaylistBody`/`AdicionarItemBody`
+    (`src/tracker/api.py`), os métodos de playlist e as tabelas `playlists`/
+    `playlist_itens` do SQLite (`src/tracker/persistence.py` — resta só `usuarios`),
+    os métodos de playlist do `PeerTrackerClient` (e os helpers `_get`/`_delete` que só
+    eles usavam) e o `Index.conhece_hash`. Testes: novo `tests/unit/test_playlist_store.py`
+    (inclui persistência entre instâncias); removido `tests/integration/test_playlists.py`
+    e os testes de playlist de `tests/unit/test_persistence.py`.
+
+### Corrigido
+- **Busca não encontrava um arquivo local após TODOS os trackers caírem e um voltar
+  vazio** (o `ls` mostrava o arquivo, mas `search x` não achava nada). Causa: o índice
+  é em memória e o `SEED_REPORT` periódico só carrega hashes — não reconstrói
+  `nome→hash` —, então um tracker que voltou sem estado nunca reaprendia o nome do
+  arquivo. Correção **sem tocar no protocolo** (as 21 mensagens seguem inalteradas):
+  quando uma busca volta vazia e há arquivos locais, a CLI re-anuncia o peer e
+  re-registra seus arquivos via `PEER_HELLO` + `REGISTER_FILE` (que já carrega
+  `nome/tamanho/n_chunks`) e refaz a busca uma vez.
+  - `src/peer/tracker_client.py` — `reenviar_hello()`: reapresenta o peer com a
+    identidade já guardada (o tracker reiniciado também esqueceu a presença, então o
+    `REGISTER_FILE` falharia com `PEER_UNKNOWN` sem um hello prévio).
+  - `src/peer/cli.py` — `_reregistrar_locais()` (re-hello + `REGISTER_FILE` de cada
+    arquivo local com nome conhecido) e `_recuperar_indice_e_rebuscar()`, disparado
+    por `search` quando o resultado vem vazio e há arquivos locais. Idempotente e
+    barato em regime estacionário (só age quando o tracker de fato perdeu o estado).
+  - Teste: `tests/integration/test_index_recovery.py` (tracker real, upload, índice
+    zerado simulando o restart, busca recupera via re-registro; e busca vazia legítima
+    sem arquivos locais não re-registra nada).
+- **Playlist aceitava qualquer string como item** (ex.: `banana` virava item). Agora
+  `playlist add` valida o formato do hash (SHA-256, 64 hex minúsculos) antes de
+  adicionar; entrada malformada é rejeitada com mensagem clara. Com as playlists agora
+  locais ao peer (ver acima), a validação vive na CLI (`src/peer/cli.py`) via o novo
+  `is_valid_sha256` (`src/common/hashing.py`), sem depender do tracker.
+  - Testes: `tests/unit/test_playlist_store.py` (operações e persistência) e
+    `tests/unit/test_hashing.py` (`is_valid_sha256`).
+
+### Alterado
+- `PeerCLI.__init__` recebe um `NameRegistry` por parâmetro (injeção via construtor,
+  §14.4); `src/peer/main.py` o instancia a partir do `storage_dir` e o injeta.
+- README §5 (comandos) e §6 (roteiro) atualizados para a operação por nome, a barra de
+  progresso e o `status` com [online]/[offline].
+
 ## [1.0.0] — Projeto completo
 
 Todas as 7 fases do plano de implementação (§9 do `CLAUDE.md`) concluídas e os

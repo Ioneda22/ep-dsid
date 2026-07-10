@@ -8,7 +8,7 @@ from pathlib import Path
 
 import pytest
 
-from src.common.hashing import sha256_bytes, sha256_file
+from src.common.hashing import is_valid_sha256, sha256_bytes, sha256_file
 
 # Vetor conhecido: sha256("") = e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855
 SHA256_VAZIO = "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855"
@@ -45,3 +45,16 @@ def test_sha256_file_inexistente(tmp_path: Path) -> None:
     """Hashar um caminho que não existe deve levantar FileNotFoundError."""
     with pytest.raises(FileNotFoundError):
         sha256_file(tmp_path / "nao-existe.bin")
+
+
+def test_is_valid_sha256_aceita_formato_correto() -> None:
+    assert is_valid_sha256("a" * 64)
+    assert is_valid_sha256(sha256_bytes(b"conteudo"))
+
+
+def test_is_valid_sha256_rejeita_formato_invalido() -> None:
+    assert not is_valid_sha256("banana")
+    assert not is_valid_sha256("A" * 64)  # maiúsculas não são hex minúsculo
+    assert not is_valid_sha256("a" * 63)  # curto demais
+    assert not is_valid_sha256("g" * 64)  # 'g' não é hex
+    assert not is_valid_sha256("")

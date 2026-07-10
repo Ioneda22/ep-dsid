@@ -1,4 +1,8 @@
-"""Testes unitários da persistência SQLite do tracker (usuários e playlists)."""
+"""Testes unitários da persistência SQLite do tracker (usuários).
+
+Playlists deixaram de ser estado do tracker (agora são locais ao peer —
+src.peer.playlist_store.PlaylistStore); por isso não há testes de playlist aqui.
+"""
 
 from __future__ import annotations
 
@@ -35,46 +39,3 @@ def test_registrar_usuario_idempotente(db: TrackerDB) -> None:
     db.registrar_usuario("alice")
     db.registrar_usuario("alice")  # PEER_HELLO repetido não duplica
     assert db.listar_usuarios() == ["alice"]
-
-
-def test_criar_e_obter_playlist(db: TrackerDB) -> None:
-    pid = db.criar_playlist("alice", "favoritas")
-    db.adicionar_item(pid, "a" * 64, db.proxima_ordem(pid))
-    db.adicionar_item(pid, "b" * 64, db.proxima_ordem(pid))
-    playlist = db.obter_playlist(pid)
-    assert playlist == {
-        "nome": "favoritas",
-        "dono": "alice",
-        "itens": ["a" * 64, "b" * 64],
-    }
-
-
-def test_obter_playlist_inexistente_e_none(db: TrackerDB) -> None:
-    assert db.obter_playlist(999) is None
-
-
-def test_listar_playlists_por_dono(db: TrackerDB) -> None:
-    db.criar_playlist("alice", "rock")
-    db.criar_playlist("alice", "jazz")
-    db.criar_playlist("bob", "pop")
-    nomes = [pl["nome"] for pl in db.listar_playlists("alice")]
-    assert nomes == ["rock", "jazz"]
-    assert db.listar_playlists("carol") == []
-
-
-def test_remover_item_preserva_ordem_sem_colisao(db: TrackerDB) -> None:
-    pid = db.criar_playlist("alice", "mix")
-    for h in ("a" * 64, "b" * 64, "c" * 64):
-        db.adicionar_item(pid, h, db.proxima_ordem(pid))
-    db.remover_item(pid, "b" * 64)
-    # proxima_ordem é MAX+1, então um novo add não colide com a ordem 2 de 'c'.
-    db.adicionar_item(pid, "d" * 64, db.proxima_ordem(pid))
-    assert db.obter_playlist(pid)["itens"] == ["a" * 64, "c" * 64, "d" * 64]
-
-
-def test_deletar_playlist_remove_cabecalho_e_itens(db: TrackerDB) -> None:
-    pid = db.criar_playlist("alice", "temp")
-    db.adicionar_item(pid, "a" * 64, db.proxima_ordem(pid))
-    db.deletar_playlist(pid)
-    assert db.obter_playlist(pid) is None
-    assert db.listar_playlists("alice") == []

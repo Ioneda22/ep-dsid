@@ -71,9 +71,7 @@ class TrackerNode:
         self._db.close()
 
 
-def _subir_api(
-    node_app: Any, api_port: int
-) -> tuple[uvicorn.Server, threading.Thread]:
+def _subir_api(node_app: Any, api_port: int) -> tuple[uvicorn.Server, threading.Thread]:
     config = uvicorn.Config(
         node_app, host="127.0.0.1", port=api_port, log_config=None, log_level="warning"
     )

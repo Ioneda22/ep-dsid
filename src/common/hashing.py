@@ -13,6 +13,20 @@ from pathlib import Path
 _READ_BUFFER_BYTES = 1024 * 1024  # 1 MiB
 
 
+def is_valid_sha256(valor: str) -> bool:
+    """Indica se valor tem o formato de um SHA-256 hex (64 dígitos hex minúsculos).
+
+    Valida apenas o FORMATO — não diz se o hash corresponde a um arquivo
+    conhecido. Usado para rejeitar entrada malformada antes de tocar o índice.
+
+        >>> is_valid_sha256("a" * 64)
+        True
+        >>> is_valid_sha256("xyz")
+        False
+    """
+    return len(valor) == 64 and all(c in "0123456789abcdef" for c in valor)
+
+
 def sha256_bytes(data: bytes) -> str:
     """Retorna o SHA-256 hexadecimal de uma sequência de bytes.
 
