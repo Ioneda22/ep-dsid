@@ -129,6 +129,9 @@ class PeerTrackerClient:
         corpo = PeerLeave(nome_peer=nome_peer)
         return self._post("/peers/leave", corpo.model_dump())
 
+    def poll_reassign(self, nome_peer: str) -> dict[str, Any] | None:
+        return self._get(f"/peers/{nome_peer}/reassign")
+
     def seed_report(
         self, nome_peer: str, ip: str, porta: int, hashes: list[str]
     ) -> dict[str, Any] | None:

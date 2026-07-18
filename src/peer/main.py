@@ -19,6 +19,7 @@ from src.peer.chunk_manager import ChunkManager
 from src.peer.cli import PeerCLI
 from src.peer.downloader import Downloader
 from src.peer.name_registry import NameRegistry
+from src.peer.reassign_poller import ReassignPoller
 from src.peer.seed_reporter import SeedReporter
 from src.peer.storage import Storage
 from src.peer.tcp_client import PeerTCPClient
@@ -52,6 +53,7 @@ class PeerSettings:
     # Constantes operacionais com valores padrão.
     chunk_size_bytes: int = 262144
     seed_report_interval_seconds: int = 180
+    reassign_poll_interval_seconds: int = 20
     chunk_request_timeout_seconds: int = 10
     download_pool_size: int = 8  # nº de threads do download paralelo
 
@@ -74,6 +76,9 @@ def load_peer_settings(config_path: Path) -> PeerSettings:
         trackers=list(cfg["trackers"]),
         chunk_size_bytes=int(cfg.get("chunk_size_bytes", 262144)),
         seed_report_interval_seconds=int(cfg.get("seed_report_interval_seconds", 180)),
+        reassign_poll_interval_seconds=int(
+            cfg.get("reassign_poll_interval_seconds", 20)
+        ),
         chunk_request_timeout_seconds=int(cfg.get("chunk_request_timeout_seconds", 10)),
         download_pool_size=int(cfg.get("download_pool_size", 8)),
     )
@@ -81,7 +86,14 @@ def load_peer_settings(config_path: Path) -> PeerSettings:
 
 def _montar_peer(
     settings: PeerSettings,
-) -> tuple[PeerCLI, PeerTCPServer, PeerTCPClient, PeerTrackerClient, SeedReporter]:
+) -> tuple[
+    PeerCLI,
+    PeerTCPServer,
+    PeerTCPClient,
+    PeerTrackerClient,
+    SeedReporter,
+    ReassignPoller,
+]:
     """Instancia e conecta os componentes do peer (injeção por parâmetro)."""
     storage = Storage(settings.storage_dir, settings.chunk_size_bytes)
     tracker_client = PeerTrackerClient(settings.trackers)
@@ -107,7 +119,12 @@ def _montar_peer(
         tracker_client=tracker_client,
         interval_seconds=settings.seed_report_interval_seconds,
     )
-    return cli, server, tcp_client, tracker_client, reporter
+    poller = ReassignPoller(
+        nome_peer=settings.nome_peer,
+        tracker_client=tracker_client,
+        interval_seconds=settings.reassign_poll_interval_seconds,
+    )
+    return cli, server, tcp_client, tracker_client, reporter, poller
 
 
 def main(argv: list[str] | None = None) -> None:
@@ -128,12 +145,13 @@ def main(argv: list[str] | None = None) -> None:
         settings.storage_dir,
     )
 
-    cli, server, tcp_client, tracker_client, reporter = _montar_peer(settings)
+    cli, server, tcp_client, tracker_client, reporter, poller = _montar_peer(settings)
     server.start()
     if not server.started.wait(timeout=5):
         print("Falha ao subir o servidor TCP de chunks (veja o log).")
         return
     reporter.start()
+    poller.start()
 
     try:
         resposta_hello = tracker_client.peer_hello(
@@ -151,6 +169,7 @@ def main(argv: list[str] | None = None) -> None:
             tracker_client.peer_leave(settings.nome_peer)
         except TodosTrackersIndisponiveis:
             logger.warning("PEER_LEAVE não enviado: todos os trackers indisponíveis")
+        poller.stop()
         reporter.stop()
         server.stop()
         tcp_client.close_all()

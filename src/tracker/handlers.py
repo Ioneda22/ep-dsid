@@ -67,6 +67,10 @@ def handle_peer_hello(msg: PeerHello, index: Index, db: TrackerDB) -> AckOk:
     return _ack(index, msg.nome_peer)
 
 
+def handle_reassign_poll(nome_peer: str, index: Index) -> AckOk:
+    return _ack(index, nome_peer)
+
+
 def handle_peer_leave(
     msg: PeerLeave, index: Index, sync_client: SyncClient | None = None
 ) -> AckOk:
