@@ -48,6 +48,7 @@ def _ack(index: Index | None = None, nome_peer: str | None = None) -> AckOk:
             logger.info(
                 "REASSIGN_TRACKER: peer %s -> %s:%d", nome_peer, alvo[0], alvo[1]
             )
+            index.remover_peer_local(nome_peer)
     return resposta
 
 
@@ -86,6 +87,7 @@ def handle_peer_hello(
                 alvo[0],
                 alvo[1],
             )
+            index.remover_peer_local(msg.nome_peer)
     return resposta
 
 

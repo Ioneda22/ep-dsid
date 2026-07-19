@@ -397,6 +397,12 @@ class Index:
         """Retira (uma única vez) a migração pendente de nome_peer, se houver."""
         with self._lock:
             return self._reassign_pendente.pop(nome_peer, None)
+        
+    def remover_peer_local(self, nome_peer: str) -> bool:
+        """Removo o peer da lista de peers locais"""
+        with self._lock:
+            return True if self.nome_peer_to_endereco.pop(nome_peer, False) != False else False
+            
 
     # ------------------------------------------------------------------
     # Consultas
