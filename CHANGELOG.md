@@ -5,36 +5,6 @@ Todas as mudanças notáveis do projeto PeerSpot são documentadas neste arquivo
 O formato é baseado em [Keep a Changelog](https://keepachangelog.com/pt-BR/1.1.0/)
 e o projeto segue [Versionamento Semântico](https://semver.org/lang/pt-BR/).
 
-## [Não lançado] — Entrega rápida do rebalanceamento de peers
-
-O rebalance (cessão de peers a um tracker reintegrado) já era agendado em segundos,
-mas só chegava ao peer **na sua próxima chamada REST** — e, para um peer ocioso, a
-única chamada periódica é o `SEED_REPORT` (a cada 3 min). Um tracker que voltava
-ficava até 3 minutos sem receber peers. A mudança **não toca o protocolo do
-`main.tex`, o índice, o LWW nem a sincronização** — apenas encurta a latência de
-entrega do `REASSIGN_TRACKER`, que continua transportado sobre REST.
-
-### Adicionado
-- **Poll de controle curto no peer** (`reassign_poll_interval_seconds`, default 20s):
-  thread daemon leve que consulta o tracker atual por uma migração pendente,
-  desacoplada do `SEED_REPORT`. Com isso um peer ocioso migra em segundos, não em
-  minutos.
-  - `src/peer/reassign_poller.py` (novo) — `ReassignPoller`: espelha o `SeedReporter`
-    (thread com `start`/`stop`/`poll_agora`, exceção engolida para não derrubar a
-    thread), mas em intervalo curto e só disparando o poll.
-  - `src/tracker/handlers.py` — `handle_reassign_poll`: reusa `_ack`/`consumir_reassign`
-    (mesma entrega já usada nos ACKs), sem mexer na presença nem no índice.
-  - `src/tracker/api.py` — rota `GET /peers/{nome_peer}/reassign` (transporte do
-    `REASSIGN_TRACKER`; nenhuma mensagem nova em `messages.py`).
-  - `src/peer/tracker_client.py` — `poll_reassign`: GET pelo `_request` existente, cuja
-    resposta já dispara `_talvez_reassignar` (a migração em si é inalterada).
-  - `src/peer/main.py` — `reassign_poll_interval_seconds` em `PeerSettings`; o poller é
-    instanciado, iniciado e parado junto do seed reporter. Os três `config/peer-*.yaml`
-    ganharam a chave.
-  - Testes (+4): `tests/integration/test_reassign_poll.py` (poll entrega o reassign e o
-    peer migra; poll sem pendência é no-op) e `tests/unit/test_reassign_poller.py`
-    (`poll_agora` consulta o tracker; exceção do cliente é engolida).
-
 ## [Não lançado] — Melhorias de experiência na CLI do peer
 
 Melhorias na única superfície voltada ao usuário (a CLI do peer, §4.3). **Nada

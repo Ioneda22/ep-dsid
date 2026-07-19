@@ -152,10 +152,6 @@ def create_app(
     def peers_leave(body: PeerLeave) -> dict[str, Any]:
         return handlers.handle_peer_leave(body, index, sync_client)
 
-    @app.get("/peers/{nome_peer}/reassign")
-    def peers_reassign(nome_peer: str) -> dict[str, Any]:
-        return handlers.handle_reassign_poll(nome_peer, index)
-
     @app.post("/peers/update-ip")
     def peers_update_ip(body: UpdateIp) -> dict[str, Any]:
         return handlers.handle_update_ip(body, index)

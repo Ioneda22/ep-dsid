@@ -11,6 +11,5 @@ trackers:
 
 chunk_size_bytes: 262144
 seed_report_interval_seconds: 180
-reassign_poll_interval_seconds: 20
 chunk_request_timeout_seconds: 10
 download_pool_size: 8
