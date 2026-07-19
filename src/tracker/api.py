@@ -42,6 +42,7 @@ from src.common.messages import (
 from src.tracker import handlers
 from src.tracker.index import Index
 from src.tracker.persistence import TrackerDB
+from src.tracker.rebalance import RebalanceManager
 from src.tracker.routing import SearchRouter
 from src.tracker.sync_client import SyncClient
 
@@ -91,6 +92,7 @@ def create_app(
     trackers_conhecidos: list[dict[str, Any]],
     sync_client: SyncClient | None = None,
     search_router: SearchRouter | None = None,
+    rebalance: RebalanceManager | None = None,
 ) -> FastAPI:
     """Monta o app FastAPI do tracker com dependências injetadas.
 
@@ -105,6 +107,8 @@ def create_app(
             None desliga a propagação (tracker isolado/testes).
         search_router: Roteamento SEARCH_FORWARD quando a busca local
             não tem hit; None limita a busca ao índice local.
+        rebalance: Sorteio inline de reassign no PEER_HELLO; None desliga o
+            espalhamento (tracker isolado/testes).
 
     Returns:
         App pronto para ser servido pelo uvicorn.
@@ -146,7 +150,7 @@ def create_app(
 
     @app.post("/peers/hello")
     def peers_hello(body: PeerHello) -> dict[str, Any]:
-        return handlers.handle_peer_hello(body, index, db)
+        return handlers.handle_peer_hello(body, index, db, rebalance)
 
     @app.post("/peers/leave")
     def peers_leave(body: PeerLeave) -> dict[str, Any]:

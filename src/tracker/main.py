@@ -243,6 +243,7 @@ def main(argv: list[str] | None = None) -> None:
         trackers_conhecidos=_trackers_conhecidos(settings),
         sync_client=sync_client,
         search_router=search_router,
+        rebalance=rebalance,
     )
     try:
         # log_config=None: mantém o logging configurado pelo setup_logging.
