@@ -1,4 +1,4 @@
-# PeerSpot — dependências (stack obrigatória do §2 do CLAUDE.md)
+# PeerSpot — dependências 
 # Tudo o mais usado é stdlib: socket, threading, sqlite3, hashlib, json, logging, uuid.
 
 # API peer <-> tracker (REST sobre HTTP, async nativo)

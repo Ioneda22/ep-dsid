@@ -7,8 +7,7 @@ Informação Distribuídos** (EACH-USP).
 Os **peers** armazenam e transferem arquivos em _chunks_ diretamente entre si; os
 **trackers (super peers)** mantêm um índice global **replicado** e sincronizado via
 _flooding_ sobre TCP, com resolução de conflitos por _Last Write Wins_ e reconciliação
-_anti-entropy_. A especificação completa está em [`main.tex`](main.tex) e o guia de
-implementação em [`CLAUDE.md`](CLAUDE.md).
+_anti-entropy_. A especificação completa está em [`main.tex`](main.tex).
 
 ---
 
@@ -164,29 +163,38 @@ python -m src.peer.main --config config/peer-carol.yaml
 ## 5. Comandos da CLI do peer
 
 ```
-help                          lista os comandos
+help / ?                      lista os comandos
 upload <caminho>              registra um arquivo de áudio na rede
-search <nome>                 busca por nome legível
-download <hash>               baixa um arquivo (faça 'search' antes)
-list                          lista arquivos completos neste peer
-remove <hash>                 remove arquivo local e notifica o tracker
-peers <hash>                  fontes de um hash (faça 'search' antes)
+search <nome>                 busca por nome legível (sem argumento: repete a última)
+download <nome | nº | hash>   baixa um arquivo (faça 'search' antes)
+list / ls                     lista arquivos completos neste peer
+remove <nome | hash>          remove arquivo local e notifica o tracker
+peers <nome | nº | hash>      fontes de um arquivo (faça 'search' antes)
 playlist create <nome>        cria uma playlist
 playlist add <id> <hash>      adiciona um hash à playlist
 playlist remove <id> <hash>   remove um hash da playlist
 playlist show <id>            mostra o conteúdo de uma playlist
 playlist list                 lista suas playlists
 playlist delete <id>          apaga uma playlist
-status                        tracker atual, trackers, arquivos, downloads
-quit                          sai ordenadamente (envia PEER_LEAVE)
+status / st                   tracker atual (com [online]/[offline]), arquivos, downloads
+clear / cls                   limpa a tela do terminal
+quit / exit                   sai ordenadamente (envia PEER_LEAVE)
 ```
 
-> `download <hash>` depende de um `search` anterior **na mesma sessão**: é a busca que
-> associa o hash ao nome legível (resolução em dois passos da especificação).
+> **Operação por nome legível.** `download`, `remove` e `peers` aceitam o **nome da
+> música** (ou o **nº** exibido na última busca, ou o hash) — não é preciso colar o
+> hash SHA-256 de 64 caracteres. `download <nome>` ainda depende de um `search`
+> anterior **na mesma sessão**: é a busca que associa o nome ao hash (resolução em
+> dois passos da especificação). Para arquivos locais (`list`/`remove`), o nome vem de
+> um registro local persistido no `storage_dir` do peer.
+>
+> A saída é **colorida** quando roda num terminal (desliga sozinha ao redirecionar ou
+> com `NO_COLOR`), o `download` mostra uma **barra de progresso**, e onde a stdlib
+> `readline` existe (Linux/macOS/Git Bash) há **histórico** com as setas ↑/↓.
 
 ---
 
-## 6. Roteiro de demonstração
+## 6. Roteiro utilizado no video de demonstração
 
 Com os **6 nós no ar** (seção 4, bootstrap primeiro):
 
@@ -205,15 +213,17 @@ Com os **6 nós no ar** (seção 4, bootstrap primeiro):
    bob> search musica
    ```
 
-   O resultado lista o `hash`, o número de chunks e as fontes (só `alice` por enquanto).
+   O resultado lista, para cada arquivo, o **nº**, o nome, o número de chunks, as
+   fontes (só `alice` por enquanto) e o `hash`.
 
-3. **Download no bob:**
+3. **Download no bob** (por nome ou pelo nº da busca — não precisa colar o hash):
 
    ```
-   bob> download <hash>
+   bob> download musica
    ```
 
-   Ao concluir (SHA-256 validado), o bob **se re-registra como nova fonte**.
+   Uma barra de progresso acompanha os chunks. Ao concluir (SHA-256 validado), o bob
+   **se re-registra como nova fonte**.
 
 4. **Confirmar no bob:**
 
@@ -227,7 +237,7 @@ Com os **6 nós no ar** (seção 4, bootstrap primeiro):
 
    ```
    carol> search musica
-   carol> download <hash>
+   carol> download musica
    ```
 
    Agora há **duas fontes** (`alice` e `bob`); a carol distribui os chunks entre elas
@@ -252,7 +262,7 @@ Com os **6 nós no ar** (seção 4, bootstrap primeiro):
 8. **Remoção de música** — na alice:
 
    ```
-   alice> remove <hash>
+   alice> remove musica
    ```
 
    Em menos de 3 s os trackers registram um _tombstone_; o `bob` continua aparecendo
@@ -287,20 +297,7 @@ replicada em todos os trackers.
 
 ---
 
-## 8. Testes
-
-Com o ambiente ativado, a partir da raiz:
-
-```bash
-pytest -v
-```
-
-A suíte (unitários + integração, esta subindo trackers/peers reais em portas
-dinâmicas) roda em menos de 60 s.
-
----
-
-## 9. Resetar o ambiente
+## 8. Resetar o ambiente
 
 Todo o estado de runtime vive em `data/` e `logs/` (ambos _gitignored_). Para um
 recomeço limpo, basta apagá-los:
@@ -313,13 +310,14 @@ Eles são recriados automaticamente na próxima execução.
 
 ---
 
-## 10. Limitações conhecidas
+## 9. Limitações conhecidas
 
 - **Playlists não são replicadas entre trackers.** São dados de usuário (SQLite
-  durável), locais ao tracker onde foram criadas — apenas o índice de arquivos
-  (`nome→hash`, `hash→peers`) é _full-replicated_. Uma playlist criada no `tracker-1`
-  não é visível no `tracker-2`, e não acompanha o peer em caso de _fallback_ ou
-  _reassign_.
+  durável no tracker), locais ao tracker onde foram criadas — apenas o índice de
+  arquivos (`nome→hash`, `hash→peers`) é _full-replicated_. Uma playlist criada no
+  `tracker-1` não é visível no `tracker-2`, e não acompanha o peer em caso de
+  _fallback_ ou _reassign_; se todos os trackers caírem e um **diferente** voltar, a
+  playlist não aparece (o mesmo tracker a preserva via SQLite).
 - **Lista de trackers do peer é estática** (definida no YAML). A adição dinâmica de
   trackers à lista de fallback do peer não é suportada; a limitação está registrada na
   especificação (`main.tex`, §"Sobre a lista TRACKERS no peer").
@@ -329,6 +327,9 @@ Eles são recriados automaticamente na próxima execução.
   autenticação de peers — fora do escopo do projeto.
 
 ---
+## 10. Uso de IA
+
+Nós utilizamos LLM's para discutir decisões de projeto e auxiliar na implementação do código.
 
 ## 11. Créditos
 

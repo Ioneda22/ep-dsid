@@ -27,6 +27,7 @@ from src.common.messages import (
 )
 from src.tracker.index import Index, LocalDelta
 from src.tracker.persistence import TrackerDB
+from src.tracker.rebalance import RebalanceManager
 from src.tracker.routing import SearchRouter
 from src.tracker.sync_client import SyncClient
 
@@ -57,14 +58,38 @@ def _propagar(sync_client: SyncClient | None, delta: LocalDelta | None) -> None:
     sync_client.propagar_sync(delta.entries, seq=delta.seq, timestamp=delta.timestamp)
 
 
-def handle_peer_hello(msg: PeerHello, index: Index, db: TrackerDB) -> AckOk:
-    """Registra a presença do peer no índice e o usuário no SQLite."""
+def handle_peer_hello(
+    msg: PeerHello,
+    index: Index,
+    db: TrackerDB,
+    rebalance: RebalanceManager | None = None,
+) -> AckOk:
+    """Registra a presença do peer no índice e o usuário no SQLite.
+
+    Com rebalance e sem uma migração já enfileirada, um sorteio inline pode
+    devolver reassign_to para espalhar o peer entre os trackers — decisão única,
+    não persistida, de modo que o peer migre no máximo uma vez.
+    """
     index.register_peer(msg.nome_peer, msg.ip, msg.porta)
     db.registrar_usuario(msg.nome_peer)
     logger.info(
         "PEER_HELLO: nome_peer=%s endereco=%s:%d", msg.nome_peer, msg.ip, msg.porta
     )
-    return _ack(index, msg.nome_peer)
+    if msg.migrando:
+        return _ack()
+    resposta = _ack(index, msg.nome_peer)
+    if rebalance is not None and "reassign_to" not in resposta:
+        alvo = rebalance.sortear_reassign()
+        if alvo is not None:
+            resposta["reassign_to"] = {"ip": alvo[0], "api_port": alvo[1]}
+            logger.info(
+                "REASSIGN_TRACKER (sorteio): peer %s -> %s:%d",
+                msg.nome_peer,
+                alvo[0],
+                alvo[1],
+            )
+            index.remover_peer_local(msg.nome_peer)
+    return resposta
 
 
 def handle_peer_leave(

@@ -24,6 +24,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 
 from src.common.errors import NotFoundError, PeerUnknownError
 from src.common.messages import (
@@ -184,6 +185,7 @@ class Index:
         with self._lock:
             self._endereco_ou_erro_locked(nome_peer)
             del self.nome_peer_to_endereco[nome_peer]
+            self._reassign_pendente.pop(nome_peer, None)
             hashes = [
                 h for h, fontes in self.hash_to_peers.items() if nome_peer in fontes
             ]
@@ -393,23 +395,36 @@ class Index:
             self._reassign_pendente[nome_peer] = (novo_ip, nova_api_port)
 
     def consumir_reassign(self, nome_peer: str) -> tuple[str, int] | None:
-        """Retira (uma única vez) a migração pendente de nome_peer, se houver."""
+        """Retira a migração pendente de nome_peer e o remove da presença local."""
         with self._lock:
-            return self._reassign_pendente.pop(nome_peer, None)
+            alvo = self._reassign_pendente.pop(nome_peer, None)
+            if alvo is not None:
+                self.nome_peer_to_endereco.pop(nome_peer, None)
+            return alvo
+
+    def remover_peer_local(self, nome_peer: str) -> bool:
+        """Remove a presença local do peer; True se havia presença."""
+        with self._lock:
+            return self.nome_peer_to_endereco.pop(nome_peer, None) is not None
 
     # ------------------------------------------------------------------
     # Consultas
     # ------------------------------------------------------------------
 
     def search_by_name(self, query: str) -> list[SearchResultEntry]:
-        """Busca exata na tabela nome→hashes (fluxo de busca).
+        """Busca por nome na tabela nome→hashes (fluxo de busca).
 
-        Um nome pode mapear para múltiplos hashes (versões distintas);
-        hashes sem nenhuma fonte ativa são omitidos do resultado.
+        Casa tanto o nome completo (com extensão) quanto o seu stem, para que
+        'Imagine' encontre 'Imagine.mp3'. Um nome pode mapear para múltiplos
+        hashes (versões distintas); hashes sem nenhuma fonte ativa são omitidos.
         """
         with self._lock:
+            hashes: set[str] = set()
+            for nome, hs in self.nome_to_hashes.items():
+                if nome == query or Path(nome).stem == query:
+                    hashes.update(hs)
             resultados: list[SearchResultEntry] = []
-            for hash_arquivo in sorted(self.nome_to_hashes.get(query, set())):
+            for hash_arquivo in sorted(hashes):
                 peers = self._peers_ativos_locked(hash_arquivo)
                 if not peers:
                     continue
@@ -423,6 +438,16 @@ class Index:
                     )
                 )
             return resultados
+
+    def conhece_hash(self, hash_arquivo: str) -> bool:
+        """Indica se o hash tem metadados no índice (arquivo registrado na rede).
+
+        Usado para validar itens de playlist: só se pode adicionar à playlist um
+        hash de um arquivo que o tracker conhece (metadados são replicados via
+        SYNC_TABLE), não uma string arbitrária.
+        """
+        with self._lock:
+            return hash_arquivo in self.hash_to_metadata
 
     def get_peers_for_hash(self, hash_arquivo: str) -> list[SearchResultPeer]:
         """Lista as fontes ativas de um hash (comando peers <hash> da CLI).

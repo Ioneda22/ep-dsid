@@ -26,7 +26,7 @@ import logging
 import uuid
 from concurrent.futures import ThreadPoolExecutor
 from pathlib import Path
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 from src.common.errors import InvalidHashError
 from src.peer.tracker_client import TodosTrackersIndisponiveis
@@ -77,13 +77,21 @@ class Downloader:
         self.chunk_manager = chunk_manager
         self.download_pool_size = download_pool_size
 
-    def download_file(self, hash_arquivo: str, nome_musica: str) -> Path | None:
+    def download_file(
+        self,
+        hash_arquivo: str,
+        nome_musica: str,
+        on_progress: Callable[[int, int], None] | None = None,
+    ) -> Path | None:
         """Baixa hash_arquivo e devolve o caminho do arquivo montado.
 
         Args:
             hash_arquivo: Hash SHA-256 escolhido pelo usuário.
             nome_musica: Nome legível associado (da busca anterior), usado para
                 refazer o SEARCH_FILE e obter fontes frescas.
+            on_progress: Callback opcional (recebidos, total) chamado a cada
+                chunk gravado — a CLI o usa para desenhar a barra de progresso.
+                Invocado de threads do pool; o receptor deve ser thread-safe.
 
         Returns:
             Caminho do arquivo completo, ou None em falha (já logada).
@@ -91,7 +99,7 @@ class Downloader:
         montado = self.storage.assembled_path(hash_arquivo)
         if montado.exists():
             logger.info("%s já está completo localmente", hash_arquivo)
-            return montado
+            return self.storage.export_assembled(hash_arquivo, nome_musica)
 
         entrada = self._buscar_entrada(hash_arquivo, nome_musica)
         if entrada is None:
@@ -120,9 +128,18 @@ class Downloader:
             len(chunks_por_fonte),
             self.download_pool_size,
         )
-        if not self._baixar_paralelo(hash_arquivo, plano):
+
+        def reportar() -> None:
+            if on_progress is not None:
+                recebidos, total = self.chunk_manager.progress(
+                    hash_arquivo, entrada.n_chunks
+                )
+                on_progress(recebidos, total)
+
+        reportar()  # estado inicial (inclui os chunks já em disco na retomada)
+        if not self._baixar_paralelo(hash_arquivo, plano, reportar):
             return None
-        return self._finalizar(hash_arquivo, entrada.n_chunks)
+        return self._finalizar(hash_arquivo, entrada.n_chunks, entrada.nome)
 
     # ------------------------------------------------------------------
     # Busca e descoberta de chunks
@@ -217,11 +234,18 @@ class Downloader:
             plano[chunk] = [primaria, *(f for f in candidatos if f != primaria)]
         return plano
 
-    def _baixar_paralelo(self, hash_arquivo: str, plano: PlanoDownload) -> bool:
+    def _baixar_paralelo(
+        self,
+        hash_arquivo: str,
+        plano: PlanoDownload,
+        reportar: Callable[[], None] | None = None,
+    ) -> bool:
         """Baixa os chunks do plano com um pool de download_pool_size workers."""
         with ThreadPoolExecutor(max_workers=self.download_pool_size) as executor:
             futuros = {
-                executor.submit(self._baixar_chunk, hash_arquivo, chunk, fontes): chunk
+                executor.submit(
+                    self._baixar_chunk, hash_arquivo, chunk, fontes, reportar
+                ): chunk
                 for chunk, fontes in plano.items()
             }
             for futuro in futuros:
@@ -236,7 +260,11 @@ class Downloader:
         return True
 
     def _baixar_chunk(
-        self, hash_arquivo: str, chunk_index: int, fontes: list[Fonte]
+        self,
+        hash_arquivo: str,
+        chunk_index: int,
+        fontes: list[Fonte],
+        reportar: Callable[[], None] | None = None,
     ) -> bool:
         """Baixa um chunk tentando cada fonte em ordem até uma servir."""
         for ip, porta in fontes:
@@ -245,6 +273,8 @@ class Downloader:
                 continue
             self.storage.save_chunk(hash_arquivo, chunk_index, dados)
             self.chunk_manager.mark_received(hash_arquivo, chunk_index)
+            if reportar is not None:
+                reportar()
             logger.debug(
                 "chunk %d de %s baixado de %s:%d", chunk_index, hash_arquivo, ip, porta
             )
@@ -255,10 +285,10 @@ class Downloader:
     # Finalização
     # ------------------------------------------------------------------
 
-    def _finalizar(self, hash_arquivo: str, n_chunks: int) -> Path | None:
-        """Monta + valida SHA-256; re-registra no tracker como nova fonte."""
+    def _finalizar(self, hash_arquivo: str, n_chunks: int, nome: str) -> Path | None:
+        """Monta + valida SHA-256; re-registra e expõe o arquivo com nome real."""
         try:
-            caminho = self.storage.assemble_file(hash_arquivo, n_chunks)
+            self.storage.assemble_file(hash_arquivo, n_chunks)
         except (FileNotFoundError, InvalidHashError):
             # Conteúdo corrompido: descarta tudo — reter chunks que
             # não batem com o hash não permite retomada.
@@ -278,5 +308,6 @@ class Downloader:
             logger.warning(
                 "re-registro de %s falhou; arquivo local mantido", hash_arquivo
             )
+        caminho = self.storage.export_assembled(hash_arquivo, nome)
         logger.info("download concluído: %s -> %s", hash_arquivo, caminho)
         return caminho

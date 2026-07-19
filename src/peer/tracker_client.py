@@ -76,6 +76,25 @@ class PeerTrackerClient:
         """Ids (ou URLs) de todos os trackers da lista de fallback (usado no status)."""
         return [self._id(i) for i in range(len(self._trackers))]
 
+    @property
+    def tracker_endereco(self) -> str:
+        """Endereço ip:api_port do tracker atualmente em uso (usado no status)."""
+        atual = self._trackers[self.current_tracker_index]
+        return f"{atual['ip']}:{atual['api_port']}"
+
+    def health(self) -> bool:
+        """GET /health no tracker ATUAL (sem fallback); True se responder ok.
+
+        Usado pelo comando status para mostrar ✓/✗ do tracker corrente; não
+        deve migrar de tracker só por checar saúde, então ignora o fallback.
+        """
+        try:
+            resposta = self._cliente(self.current_tracker_index).get("/health")
+            resposta.raise_for_status()
+            return True
+        except httpx.HTTPError:
+            return False
+
     def close(self) -> None:
         """Encerra todas as sessões HTTP abertas."""
         for cliente in self._clientes.values():
@@ -91,6 +110,19 @@ class PeerTrackerClient:
         self._identidade = (nome_peer, ip, porta)
         corpo = PeerHello(nome_peer=nome_peer, ip=ip, porta=porta)
         return self._post("/peers/hello", corpo.model_dump())
+
+    def reenviar_hello(self) -> bool:
+        """Reapresenta o peer (PEER_HELLO) usando a identidade já guardada.
+
+        Usado na recuperação de um tracker que perdeu o estado: ele também
+        esqueceu a presença do peer, então um REGISTER_FILE falharia com
+        PEER_UNKNOWN — um hello prévio restabelece a presença. No-op (False) se
+        o peer ainda não fez o primeiro hello.
+        """
+        if self._identidade is None:
+            return False
+        nome_peer, ip, porta = self._identidade
+        return self.peer_hello(nome_peer, ip, porta) is not None
 
     def peer_leave(self, nome_peer: str) -> dict[str, Any] | None:
         """Envia PEER_LEAVE (saída ordenada)."""
@@ -271,7 +303,15 @@ class PeerTrackerClient:
             self._reassignando = False
 
     def _migrar_para(self, ip: str, api_port: int) -> None:
-        """Aponta o cliente ao tracker (ip, api_port) e se reapresenta lá."""
+        """Aponta o cliente ao tracker (ip, api_port) e se reapresenta lá.
+
+        A migração só vale se o destino aceitar o PEER_HELLO. Como o tracker de
+        origem já descartou a presença ao emitir o reassign, um destino morto
+        deixaria o peer sem presença em lugar nenhum; nesse caso o cliente
+        volta à origem e se reapresenta lá.
+        """
+        anterior = self.current_tracker_index
+        acrescentado = False
         for idx, tracker in enumerate(self._trackers):
             if str(tracker["ip"]) == ip and int(tracker["api_port"]) == api_port:
                 self.current_tracker_index = idx
@@ -281,15 +321,35 @@ class PeerTrackerClient:
                 {"tracker_id": f"{ip}:{api_port}", "ip": ip, "api_port": api_port}
             )
             self.current_tracker_index = len(self._trackers) - 1
-        logger.info("REASSIGN_TRACKER: peer migrado para %s:%d", ip, api_port)
-        if self._identidade is not None:
-            self._hello_direto()
+            acrescentado = True
+        if self._identidade is None or self._hello_direto():
+            logger.info("REASSIGN_TRACKER: peer migrado para %s:%d", ip, api_port)
+            return
+        logger.warning(
+            "REASSIGN_TRACKER: %s:%d indisponível; peer permanece em %s",
+            ip,
+            api_port,
+            self._id(anterior),
+        )
+        self.current_tracker_index = anterior
+        if acrescentado:
+            self._trackers.pop()
+            cliente = self._clientes.pop(len(self._trackers), None)
+            if cliente is not None:
+                cliente.close()
+        self._hello_direto()
 
-    def _hello_direto(self) -> None:
-        """Envia um PEER_HELLO ao tracker atual, sem fallback nem reassign."""
+    def _hello_direto(self) -> bool:
+        """Envia um PEER_HELLO ao tracker atual, sem fallback nem reassign.
+
+        Returns:
+            True se o tracker atual aceitou a apresentação.
+        """
         assert self._identidade is not None
         nome_peer, ip, porta = self._identidade
-        corpo = PeerHello(nome_peer=nome_peer, ip=ip, porta=porta).model_dump()
+        corpo = PeerHello(
+            nome_peer=nome_peer, ip=ip, porta=porta, migrando=True
+        ).model_dump()
         try:
             resposta = self._cliente(self.current_tracker_index).post(
                 "/peers/hello", json=corpo
@@ -299,6 +359,8 @@ class PeerTrackerClient:
             logger.warning(
                 "PEER_HELLO ao novo tracker %s falhou (%s)", self.tracker_id, exc
             )
+            return False
+        return True
 
     # ------------------------------------------------------------------
     # Sessões HTTP por tracker
