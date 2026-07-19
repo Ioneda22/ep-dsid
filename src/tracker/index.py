@@ -24,6 +24,7 @@ import threading
 import time
 from collections.abc import Callable
 from dataclasses import dataclass
+from pathlib import Path
 
 from src.common.errors import NotFoundError, PeerUnknownError
 from src.common.messages import (
@@ -402,14 +403,19 @@ class Index:
     # ------------------------------------------------------------------
 
     def search_by_name(self, query: str) -> list[SearchResultEntry]:
-        """Busca exata na tabela nome→hashes (fluxo de busca).
+        """Busca por nome na tabela nome→hashes (fluxo de busca).
 
-        Um nome pode mapear para múltiplos hashes (versões distintas);
-        hashes sem nenhuma fonte ativa são omitidos do resultado.
+        Casa tanto o nome completo (com extensão) quanto o seu stem, para que
+        'Imagine' encontre 'Imagine.mp3'. Um nome pode mapear para múltiplos
+        hashes (versões distintas); hashes sem nenhuma fonte ativa são omitidos.
         """
         with self._lock:
+            hashes: set[str] = set()
+            for nome, hs in self.nome_to_hashes.items():
+                if nome == query or Path(nome).stem == query:
+                    hashes.update(hs)
             resultados: list[SearchResultEntry] = []
-            for hash_arquivo in sorted(self.nome_to_hashes.get(query, set())):
+            for hash_arquivo in sorted(hashes):
                 peers = self._peers_ativos_locked(hash_arquivo)
                 if not peers:
                     continue

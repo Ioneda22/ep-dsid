@@ -61,6 +61,14 @@ class NameRegistry:
         return self._hash_para_nome.get(hash_arquivo)
 
     def hashes_por_nome(self, nome: str) -> list[str]:
-        """Hashes cujo nome casa (case-insensitive) com o termo dado."""
+        """Hashes cujo nome (ou seu stem) casa (case-insensitive) com o termo.
+
+        Casa 'Imagine' com 'Imagine.mp3' para que remove/list operem por nome
+        sem exigir a extensão.
+        """
         alvo = nome.casefold()
-        return [h for h, n in self._hash_para_nome.items() if n.casefold() == alvo]
+        return [
+            h
+            for h, n in self._hash_para_nome.items()
+            if n.casefold() == alvo or Path(n).stem.casefold() == alvo
+        ]

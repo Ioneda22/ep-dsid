@@ -55,6 +55,52 @@ def test_assemble_valida_e_apaga_chunks(storage: Storage, tmp_path: Path) -> Non
     assert storage.list_local_files() == [hash_ok]
 
 
+def test_export_assembled_da_nome_e_extensao(storage: Storage, tmp_path: Path) -> None:
+    conteudo = _conteudo(CHUNK * 2)
+    hash_ok = sha256_bytes(conteudo)
+    for i in range(2):
+        storage.save_chunk(hash_ok, i, conteudo[i * CHUNK : (i + 1) * CHUNK])
+    storage.assemble_file(hash_ok, 2)
+
+    caminho = storage.export_assembled(hash_ok, "Imagine.mp3")
+
+    assert caminho == tmp_path / "peer-teste" / "downloads" / "Imagine.mp3"
+    assert caminho.read_bytes() == conteudo
+
+
+def test_export_assembled_idempotente(storage: Storage) -> None:
+    conteudo = _conteudo(CHUNK)
+    hash_ok = sha256_bytes(conteudo)
+    storage.save_chunk(hash_ok, 0, conteudo)
+    storage.assemble_file(hash_ok, 1)
+
+    primeiro = storage.export_assembled(hash_ok, "musica.mp3")
+    segundo = storage.export_assembled(hash_ok, "musica.mp3")
+    assert primeiro == segundo
+
+
+def test_export_assembled_nome_colidido_ganha_prefixo(storage: Storage) -> None:
+    conteudo_a = _conteudo(CHUNK)
+    conteudo_b = _conteudo(CHUNK * 2)
+    hash_a, hash_b = sha256_bytes(conteudo_a), sha256_bytes(conteudo_b)
+    storage.save_chunk(hash_a, 0, conteudo_a)
+    storage.assemble_file(hash_a, 1)
+    for i in range(2):
+        storage.save_chunk(hash_b, i, conteudo_b[i * CHUNK : (i + 1) * CHUNK])
+    storage.assemble_file(hash_b, 2)
+
+    a = storage.export_assembled(hash_a, "mesmo.mp3")
+    b = storage.export_assembled(hash_b, "mesmo.mp3")
+    assert a != b
+    assert a.read_bytes() == conteudo_a
+    assert b.read_bytes() == conteudo_b
+
+
+def test_export_assembled_sem_montado_levanta(storage: Storage) -> None:
+    with pytest.raises(FileNotFoundError):
+        storage.export_assembled("0" * 64, "x.mp3")
+
+
 def test_assemble_chunk_faltando_levanta(storage: Storage) -> None:
     conteudo = _conteudo(CHUNK * 2)
     hash_ok = sha256_bytes(conteudo)

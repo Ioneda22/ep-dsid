@@ -14,6 +14,7 @@ correspondente do arquivo montado on-the-fly (seek/read) —
 
 from __future__ import annotations
 
+import os
 import shutil
 from pathlib import Path
 
@@ -201,6 +202,42 @@ class Storage:
 
         temporario.replace(destino)
         shutil.rmtree(self._chunks_dir(hash_arquivo), ignore_errors=True)
+        return destino
+
+    def export_assembled(self, hash_arquivo: str, nome: str) -> Path:
+        """Expõe o arquivo montado sob o nome real em downloads/<nome>.
+
+        O <hash>/arquivo interno (endereçado por hash, usado para servir
+        chunks) permanece intacto; aqui damos ao usuário o MESMO conteúdo com
+        nome e extensão legíveis. Usa hardlink (sem custo de espaço) e cai para
+        cópia se o SO não suportar. Um nome já ocupado por outro hash recebe um
+        prefixo do hash para não colidir.
+
+        Args:
+            hash_arquivo: Hash SHA-256 do arquivo montado.
+            nome: Nome legível com extensão (ex.: "Imagine.mp3").
+
+        Returns:
+            Caminho do arquivo nomeado em <storage_dir>/downloads/.
+
+        Raises:
+            FileNotFoundError: Se o arquivo montado não existir.
+        """
+        montado = self.assembled_path(hash_arquivo)
+        if not montado.exists():
+            raise FileNotFoundError(f"arquivo montado ausente para {hash_arquivo}")
+        downloads = self.storage_dir / "downloads"
+        downloads.mkdir(parents=True, exist_ok=True)
+        nome_seguro = Path(nome).name or hash_arquivo
+        destino = downloads / nome_seguro
+        if destino.exists() and destino.samefile(montado):
+            return destino
+        if destino.exists():
+            destino = downloads / f"{hash_arquivo[:8]}_{nome_seguro}"
+        try:
+            os.link(montado, destino)
+        except OSError:
+            shutil.copyfile(montado, destino)
         return destino
 
     def remove_file(self, hash_arquivo: str) -> None:

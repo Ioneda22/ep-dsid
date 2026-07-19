@@ -203,8 +203,11 @@ class PeerCLI:
         return None
 
     def _entrada_por_nome(self, arg: str) -> SearchResultEntry | None:
+        alvo = arg.casefold()
         correspondencias = [
-            e for e in self._ultima_busca if e.nome.casefold() == arg.casefold()
+            e
+            for e in self._ultima_busca
+            if e.nome.casefold() == alvo or Path(e.nome).stem.casefold() == alvo
         ]
         if not correspondencias:
             print(console.aviso(f"'{arg}' não está na última busca."))
@@ -251,18 +254,18 @@ class PeerCLI:
         resposta = self.tracker_client.register_file(
             self.nome_peer,
             hash_arquivo,
-            nome=origem.stem,
+            nome=origem.name,
             tamanho=tamanho,
             n_chunks=n_chunks,
         )
         if resposta is None:
             print(console.erro("Falha ao registrar no tracker (veja o log)."))
             return
-        self.name_registry.registrar(hash_arquivo, origem.stem)
+        self.name_registry.registrar(hash_arquivo, origem.name)
         tam = self._formatar_tamanho(tamanho)
         print(
             console.ok(
-                f"Upload registrado: '{origem.stem}' — {tam} ({n_chunks} chunks)"
+                f"Upload registrado: '{origem.name}' — {tam} ({n_chunks} chunks)"
             )
         )
         print(f"  {console.dim(hash_arquivo)}")

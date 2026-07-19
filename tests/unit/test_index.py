@@ -114,6 +114,18 @@ def test_busca_nome_inexistente_retorna_vazio(indice: Index) -> None:
     assert indice.search_by_name("Inexistente") == []
 
 
+def test_busca_por_stem_encontra_nome_com_extensao(indice: Index) -> None:
+    indice.register_peer("alice", "127.0.0.1", 7001)
+    indice.register_file("alice", HASH_A, nome="Imagine.mp3", tamanho=1, n_chunks=1)
+
+    por_stem = indice.search_by_name("Imagine")
+    por_nome_completo = indice.search_by_name("Imagine.mp3")
+
+    assert [r.hash for r in por_stem] == [HASH_A]
+    assert [r.hash for r in por_nome_completo] == [HASH_A]
+    assert por_stem[0].nome == "Imagine.mp3"
+
+
 def test_mesmo_nome_pode_ter_multiplos_hashes(indice: Index) -> None:
     _hello_e_upload(indice)
     indice.register_file("alice", HASH_B, nome="Imagine", tamanho=2, n_chunks=1)

@@ -99,7 +99,7 @@ class Downloader:
         montado = self.storage.assembled_path(hash_arquivo)
         if montado.exists():
             logger.info("%s já está completo localmente", hash_arquivo)
-            return montado
+            return self.storage.export_assembled(hash_arquivo, nome_musica)
 
         entrada = self._buscar_entrada(hash_arquivo, nome_musica)
         if entrada is None:
@@ -139,7 +139,7 @@ class Downloader:
         reportar()  # estado inicial (inclui os chunks já em disco na retomada)
         if not self._baixar_paralelo(hash_arquivo, plano, reportar):
             return None
-        return self._finalizar(hash_arquivo, entrada.n_chunks)
+        return self._finalizar(hash_arquivo, entrada.n_chunks, entrada.nome)
 
     # ------------------------------------------------------------------
     # Busca e descoberta de chunks
@@ -285,10 +285,10 @@ class Downloader:
     # Finalização
     # ------------------------------------------------------------------
 
-    def _finalizar(self, hash_arquivo: str, n_chunks: int) -> Path | None:
-        """Monta + valida SHA-256; re-registra no tracker como nova fonte."""
+    def _finalizar(self, hash_arquivo: str, n_chunks: int, nome: str) -> Path | None:
+        """Monta + valida SHA-256; re-registra e expõe o arquivo com nome real."""
         try:
-            caminho = self.storage.assemble_file(hash_arquivo, n_chunks)
+            self.storage.assemble_file(hash_arquivo, n_chunks)
         except (FileNotFoundError, InvalidHashError):
             # Conteúdo corrompido: descarta tudo — reter chunks que
             # não batem com o hash não permite retomada.
@@ -308,5 +308,6 @@ class Downloader:
             logger.warning(
                 "re-registro de %s falhou; arquivo local mantido", hash_arquivo
             )
+        caminho = self.storage.export_assembled(hash_arquivo, nome)
         logger.info("download concluído: %s -> %s", hash_arquivo, caminho)
         return caminho
