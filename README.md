@@ -7,8 +7,7 @@ Informação Distribuídos** (EACH-USP).
 Os **peers** armazenam e transferem arquivos em _chunks_ diretamente entre si; os
 **trackers (super peers)** mantêm um índice global **replicado** e sincronizado via
 _flooding_ sobre TCP, com resolução de conflitos por _Last Write Wins_ e reconciliação
-_anti-entropy_. A especificação completa está em [`main.tex`](main.tex) e o guia de
-implementação em [`CLAUDE.md`](CLAUDE.md).
+_anti-entropy_. A especificação completa está em [`main.tex`](main.tex).
 
 ---
 
@@ -195,7 +194,7 @@ quit / exit                   sai ordenadamente (envia PEER_LEAVE)
 
 ---
 
-## 6. Roteiro de demonstração
+## 6. Roteiro utilizado no video de demonstração
 
 Com os **6 nós no ar** (seção 4, bootstrap primeiro):
 
@@ -328,8 +327,11 @@ Eles são recriados automaticamente na próxima execução.
   autenticação de peers — fora do escopo do projeto.
 
 ---
+## 10. Uso de IA
 
-## 10. Créditos
+Nós utilizamos LLM's para discutir decisões de projeto e auxiliar na implementação do código.
+
+## 11. Créditos
 
 Trabalho desenvolvido por:
 
