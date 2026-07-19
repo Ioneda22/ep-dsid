@@ -185,6 +185,7 @@ class Index:
         with self._lock:
             self._endereco_ou_erro_locked(nome_peer)
             del self.nome_peer_to_endereco[nome_peer]
+            self._reassign_pendente.pop(nome_peer, None)
             hashes = [
                 h for h, fontes in self.hash_to_peers.items() if nome_peer in fontes
             ]
@@ -394,15 +395,17 @@ class Index:
             self._reassign_pendente[nome_peer] = (novo_ip, nova_api_port)
 
     def consumir_reassign(self, nome_peer: str) -> tuple[str, int] | None:
-        """Retira (uma única vez) a migração pendente de nome_peer, se houver."""
+        """Retira a migração pendente de nome_peer e o remove da presença local."""
         with self._lock:
-            return self._reassign_pendente.pop(nome_peer, None)
-        
+            alvo = self._reassign_pendente.pop(nome_peer, None)
+            if alvo is not None:
+                self.nome_peer_to_endereco.pop(nome_peer, None)
+            return alvo
+
     def remover_peer_local(self, nome_peer: str) -> bool:
-        """Removo o peer da lista de peers locais"""
+        """Remove a presença local do peer; True se havia presença."""
         with self._lock:
-            return True if self.nome_peer_to_endereco.pop(nome_peer, False) != False else False
-            
+            return self.nome_peer_to_endereco.pop(nome_peer, None) is not None
 
     # ------------------------------------------------------------------
     # Consultas

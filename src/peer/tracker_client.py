@@ -321,7 +321,9 @@ class PeerTrackerClient:
         """Envia um PEER_HELLO ao tracker atual, sem fallback nem reassign."""
         assert self._identidade is not None
         nome_peer, ip, porta = self._identidade
-        corpo = PeerHello(nome_peer=nome_peer, ip=ip, porta=porta).model_dump()
+        corpo = PeerHello(
+            nome_peer=nome_peer, ip=ip, porta=porta, migrando=True
+        ).model_dump()
         try:
             resposta = self._cliente(self.current_tracker_index).post(
                 "/peers/hello", json=corpo

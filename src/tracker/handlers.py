@@ -48,7 +48,6 @@ def _ack(index: Index | None = None, nome_peer: str | None = None) -> AckOk:
             logger.info(
                 "REASSIGN_TRACKER: peer %s -> %s:%d", nome_peer, alvo[0], alvo[1]
             )
-            index.remover_peer_local(nome_peer)
     return resposta
 
 
@@ -76,6 +75,8 @@ def handle_peer_hello(
     logger.info(
         "PEER_HELLO: nome_peer=%s endereco=%s:%d", msg.nome_peer, msg.ip, msg.porta
     )
+    if msg.migrando:
+        return _ack()
     resposta = _ack(index, msg.nome_peer)
     if rebalance is not None and "reassign_to" not in resposta:
         alvo = rebalance.sortear_reassign()

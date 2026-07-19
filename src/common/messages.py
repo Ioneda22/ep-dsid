@@ -24,6 +24,7 @@ class PeerHello(BaseModel):
     nome_peer: str
     ip: str
     porta: int
+    migrando: bool = False
 
 
 class PeerLeave(BaseModel):
