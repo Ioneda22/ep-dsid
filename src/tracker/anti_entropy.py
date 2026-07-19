@@ -11,9 +11,6 @@ O(n_trackers), não O(índice): nada do estado viaja no digest.
 O intervalo deve ficar ABAIXO da retenção dos tombstones (600s / 10 min) para
 repor uma remoção perdida antes de o tombstone expirar.
 
-Espelha o padrão de thread do TombstoneReaper: a classe só dá o ritmo; toda a
-lógica de estado vive no Index (versoes) e no SyncClient
-(propagar_digest), o que mantém tudo testável sem dormir.
 """
 
 from __future__ import annotations
@@ -32,7 +29,7 @@ DIGEST_INTERVAL = 300.0
 
 
 class DigestBroadcaster:
-    """Thread daemon que faz push periódico de SYNC_DIGEST (backstop).
+    """Thread daemon que faz push periódico de SYNC_DIGEST.
 
     Exemplo:
         >>> broadcaster = DigestBroadcaster("tracker-1", index, sync_client)
