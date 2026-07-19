@@ -1,5 +1,5 @@
 #!/usr/bin/env bash
-# run_tracker.sh — sobe um tracker do PeerSpot num terminal (§8.3 do CLAUDE.md).
+# run_tracker.sh — sobe um tracker do PeerSpot num terminal
 #
 # Uso: ./scripts/run_tracker.sh <n>
 #   ex.: ./scripts/run_tracker.sh 1   (bootstrap — suba PRIMEIRO)
